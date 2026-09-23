@@ -1,8 +1,9 @@
 /* ============================================================================
- * DRA-PDF C-Icon to PDF Generator - Win32 GCC Implementation 
+ * DRA-PDF C-Icon to PDF Generator - Win16 OpenWatcom Implementation 
  *
- * COMPILATION INSTRUCTIONS (GCC):
- *   gcc -Os -s -mwindows DRA-PDF.c -o DRA-PDF.exe -lcomdlg32 -lshell32
+ * COMPILATION INSTRUCTIONS (OpenWatcom):
+ *   Using single-step WCL:
+ *     wcl -ml -za99 -bt=windows -l=windows -k16k -zq -os -s dra-pdf.c
  *
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
@@ -19,6 +20,9 @@
 #include <ctype.h>
 #include <direct.h>
 #include <stdarg.h>
+
+#pragma library("commdlg.lib")
+#pragma library("shell.lib")
 
 #ifndef PI
 #define PI 3.14159265358979323846
@@ -60,7 +64,7 @@ typedef struct {
 typedef struct { 
     int caseId; 
     char name[64]; 
-    Shape* shapes[MAX_SHAPES]; 
+    Shape FAR* shapes[MAX_SHAPES]; 
     int shapeCount; 
     Dimension dims[MAX_DIMS];
     int dimCount;
@@ -73,7 +77,7 @@ typedef struct {
 
 typedef struct {
     char path[260];
-    Shape* shapes[MAX_SHAPES];
+    Shape FAR* shapes[MAX_SHAPES];
     int shapeCount;
     double minX, minY, maxX, maxY;
     Dimension dims[MAX_DIMS];
@@ -81,9 +85,9 @@ typedef struct {
     char unitName[32];
 } RefCache;
 
-IconDef* parsedIcons[MAX_ICONS] = {0};
+IconDef FAR* parsedIcons[MAX_ICONS] = {0};
 int parsedCount = 0;
-RefCache* refCache[MAX_REFS] = {0};
+RefCache FAR* refCache[MAX_REFS] = {0};
 int refCacheCount = 0;
 char loadedCFile[260] = "";
 int g_RenderRefDepth = 0;
@@ -102,7 +106,7 @@ void FormatDimension(double val, const char* unit, char* outBuf);
 void pdf_out(FILE* f, long* stream_len, const char* fmt, ...);
 void pdf_color(FILE* f, long* stream_len, int is_stroke, long hex_color);
 void pdf_text_color(FILE* f, long* stream_len, long hex_color);
-void DrawPDFDimensions(FILE* f, long* stream_len, Dimension* dims, int dimCount, Shape** shapes, int shapeCount, double pageScale, double offX, double offY, double minX, double minY, double pt_h, const char* unitName, double rScale, double cosR, double sinR, double objCx, double objCy, double lcx, double lcy);
+void DrawPDFDimensions(FILE* f, long* stream_len, Dimension* dims, int dimCount, Shape FAR* FAR* shapes, int shapeCount, double pageScale, double offX, double offY, double minX, double minY, double pt_h, const char* unitName, double rScale, double cosR, double sinR, double objCx, double objCy, double lcx, double lcy);
 
 /* --- Utility Functions --- */
 void sanitize_pdf_string(char* str) {
@@ -180,7 +184,7 @@ void FormatDimension(double val, const char* unit, char* outBuf) {
     if (val < 0.0) val = 0.0;
     if (unit == NULL) unit = "None";
     
-    if (_stricmp(unit, "feet-inches") == 0) {
+    if (stricmp(unit, "feet-inches") == 0) {
         int feet = (int)(val / 12.0);
         double inches = val - (feet * 12.0);
         if (fabs(inches - round(inches)) < 0.001) {
@@ -190,10 +194,10 @@ void FormatDimension(double val, const char* unit, char* outBuf) {
         } else {
             sprintf(outBuf, "%d'-%.2f\"", feet, inches);
         }
-    } else if (_stricmp(unit, "inches") == 0) {
+    } else if (stricmp(unit, "inches") == 0) {
         if (fabs(val - round(val)) < 0.001) sprintf(outBuf, "%d\"", (int)round(val));
         else sprintf(outBuf, "%.2f\"", val);
-    } else if (_stricmp(unit, "None") == 0 || unit[0] == '\0') {
+    } else if (stricmp(unit, "None") == 0 || unit[0] == '\0') {
         if (fabs(val - round(val)) < 0.001) sprintf(outBuf, "%d", (int)round(val));
         else sprintf(outBuf, "%.2f", val);
     } else {
@@ -209,11 +213,11 @@ void FreeAllData(void) {
         if (parsedIcons[i]) {
             for (j = 0; j < parsedIcons[i]->shapeCount; j++) {
                 if (parsedIcons[i]->shapes[j]) {
-                    free(parsedIcons[i]->shapes[j]);
+                    GlobalFreePtr(parsedIcons[i]->shapes[j]);
                     parsedIcons[i]->shapes[j] = NULL;
                 }
             }
-            free(parsedIcons[i]);
+            GlobalFreePtr(parsedIcons[i]);
             parsedIcons[i] = NULL;
         }
     }
@@ -223,11 +227,11 @@ void FreeAllData(void) {
         if (refCache[i]) {
             for (j = 0; j < refCache[i]->shapeCount; j++) {
                 if (refCache[i]->shapes[j]) {
-                    free(refCache[i]->shapes[j]);
+                    GlobalFreePtr(refCache[i]->shapes[j]);
                     refCache[i]->shapes[j] = NULL;
                 }
             }
-            free(refCache[i]);
+            GlobalFreePtr(refCache[i]);
             refCache[i] = NULL;
         }
     }
@@ -235,7 +239,7 @@ void FreeAllData(void) {
 }
 
 /* --- C Parsing Engine --- */
-void SilentLoadC(const char* path, RefCache* ref) {
+void SilentLoadC(const char* path, RefCache FAR* ref) {
     FILE* f; long sz; char *d, *cur;
     ref->shapeCount = 0; ref->dimCount = 0;
     strcpy(ref->unitName, "mm");
@@ -243,7 +247,7 @@ void SilentLoadC(const char* path, RefCache* ref) {
     f = fopen(path, "rb"); if (!f) return;
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
     if (sz <= 0 || sz > 60000L) { fclose(f); return; }
-    d = (char*)calloc(1, sz + 1);
+    d = (char*)GlobalAllocPtr(GHND, sz + 1);
     if (!d) { fclose(f); return; }
     fread(d, 1, (size_t)sz, f); d[sz] = '\0'; fclose(f);
 
@@ -259,7 +263,7 @@ void SilentLoadC(const char* path, RefCache* ref) {
             char *tag = strstr(st, "TAG_TEXT("), *dim = strstr(st, "DIMENSION(");
             char *pgDef = strstr(st, "PAGE_DEF(");
             char *colorSearch, *next = pt ? pt : lStr;
-            Shape* s;
+            Shape FAR* s;
 
             if (lStr && (!next || lStr < next)) next = lStr;
             if (ext && (!next || ext < next)) next = ext; 
@@ -300,7 +304,7 @@ void SilentLoadC(const char* path, RefCache* ref) {
             }
 
             if (!ref->shapes[ref->shapeCount]) {
-                ref->shapes[ref->shapeCount] = (Shape*)calloc(1, sizeof(Shape));
+                ref->shapes[ref->shapeCount] = (Shape FAR*)GlobalAllocPtr(GHND, sizeof(Shape));
                 if (!ref->shapes[ref->shapeCount]) break;
             }
             s = ref->shapes[ref->shapeCount];
@@ -411,17 +415,17 @@ void SilentLoadC(const char* path, RefCache* ref) {
             st = strchr(next, ';'); if (!st) st = next + 1;
         }
     }
-    free(d);
+    GlobalFreePtr(d);
 }
 
 int EnsureRefLoaded(const char* path) {
     int i, j; double minX, minY, maxX, maxY;
     if (!path || !path[0]) return -1;
-    for (i = 0; i < refCacheCount; i++) if (refCache[i] && _stricmp(refCache[i]->path, path) == 0) return i;
+    for (i = 0; i < refCacheCount; i++) if (refCache[i] && stricmp(refCache[i]->path, path) == 0) return i;
     if (refCacheCount >= MAX_REFS) return -1;
     
     if (!refCache[refCacheCount]) {
-        refCache[refCacheCount] = (RefCache*)calloc(1, sizeof(RefCache));
+        refCache[refCacheCount] = (RefCache FAR*)GlobalAllocPtr(GHND, sizeof(RefCache));
         if (!refCache[refCacheCount]) return -1;
         memset(refCache[refCacheCount], 0, sizeof(RefCache));
     }
@@ -430,7 +434,7 @@ int EnsureRefLoaded(const char* path) {
 
     minX = 99999.0; minY = 99999.0; maxX = -99999.0; maxY = -99999.0;
     for (i = 0; i < refCache[refCacheCount]->shapeCount; i++) {
-        Shape* sh = refCache[refCacheCount]->shapes[i];
+        Shape FAR* sh = refCache[refCacheCount]->shapes[i];
         for (j = 0; j < sh->ptCount; j++) {
             minX = fmin(minX, sh->ptsX[j]); maxX = fmax(maxX, sh->ptsX[j]);
             minY = fmin(minY, sh->ptsY[j]); maxY = fmax(maxY, sh->ptsY[j]);
@@ -445,7 +449,7 @@ int EnsureRefLoaded(const char* path) {
 int LoadCFile(const char* path) {
     FILE* f; long sz; char *d, *cur, *endBlock, *st, *pt, *lStr, *ext, *tag, *next;
     int i, cId, tmpCount, tmpDimCount;
-    Shape* tmpShapes[MAX_SHAPES];
+    Shape FAR* tmpShapes[MAX_SHAPES];
     Dimension tmpDims[MAX_DIMS];
 
     memset(tmpShapes, 0, sizeof(tmpShapes));
@@ -458,7 +462,7 @@ int LoadCFile(const char* path) {
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
     if (sz <= 0 || sz > 60000L) { fclose(f); loadedCFile[0] = '\0'; return 0; }
 
-    d = (char*)calloc(1, (size_t)sz + 1);
+    d = (char*)GlobalAllocPtr(GHND, (size_t)sz + 1);
     if (d) {
         fread(d, 1, (size_t)sz, f); d[sz] = '\0'; fclose(f); cur = d;
         while ((cur = strstr(cur, "case ")) != NULL && parsedCount < MAX_ICONS) {
@@ -476,7 +480,7 @@ int LoadCFile(const char* path) {
                 char *pgDef = strstr(st, "PAGE_DEF(");
                 pt = strstr(st, "POINT "); lStr = strstr(st, "L(");
                 ext = strstr(st, "EXT_REF("); tag = strstr(st, "TAG_TEXT(");
-                Shape* s;
+                Shape FAR* s;
 
                 next = pt ? pt : lStr;
                 if (lStr && (!next || lStr < next)) next = lStr;
@@ -529,7 +533,7 @@ int LoadCFile(const char* path) {
                     st = strchr(next, ';'); if (!st) st = next + 1; continue; 
                 }
 
-                if (!tmpShapes[tmpCount]) tmpShapes[tmpCount] = (Shape*)calloc(1, sizeof(Shape));
+                if (!tmpShapes[tmpCount]) tmpShapes[tmpCount] = (Shape FAR*)GlobalAllocPtr(GHND, sizeof(Shape));
                 s = tmpShapes[tmpCount];
                 if (!s) break;
 
@@ -628,7 +632,7 @@ int LoadCFile(const char* path) {
                 st = strchr(next, ';'); if (!st) st = next + 1;
             }
 
-            parsedIcons[parsedCount] = (IconDef*)calloc(1, sizeof(IconDef));
+            parsedIcons[parsedCount] = (IconDef FAR*)GlobalAllocPtr(GHND, sizeof(IconDef));
             if (parsedIcons[parsedCount]) {
                 memset(parsedIcons[parsedCount], 0, sizeof(IconDef));
                 parsedIcons[parsedCount]->caseId = cId;
@@ -652,13 +656,13 @@ int LoadCFile(const char* path) {
             }
             cur = endBlock;
         }
-        free(d);
+        GlobalFreePtr(d);
     } else {
         loadedCFile[0] = '\0'; fclose(f); return 0;
     }
 
     for (i = 0; i < MAX_SHAPES; i++) {
-        if (tmpShapes[i]) free(tmpShapes[i]);
+        if (tmpShapes[i]) GlobalFreePtr(tmpShapes[i]);
     }
     return parsedCount;
 }
@@ -694,10 +698,10 @@ void pdf_text_color(FILE* f, long* stream_len, long hex_color) {
     pdf_out(f, stream_len, "%.3f %.3f %.3f rg\n", r, g, b); 
 }
 
-void CalcBoundingBox(Shape** shapes, int count, double* outMinX, double* outMinY, double* outMaxX, double* outMaxY) {
+void CalcBoundingBox(Shape FAR* FAR* shapes, int count, double* outMinX, double* outMinY, double* outMaxX, double* outMaxY) {
     int i, p; double minX = 99999.0, minY = 99999.0, maxX = -99999.0, maxY = -99999.0;
     for (i=0; i<count; i++) {
-        Shape* sh = shapes[i];
+        Shape FAR* sh = shapes[i];
         if (sh->type == 3) {
             char refPath[260]; double rScale = 1.0; double rRot = 0.0; char *pScale, *pRot, *pEnd; int pathLen;
             if (strncmp(sh->text, "{{EXT_REF=", 10) == 0) {
@@ -714,7 +718,7 @@ void CalcBoundingBox(Shape** shapes, int count, double* outMinX, double* outMinY
                     if (pRot) sscanf(pRot, " rot=%lf", &rRot);
                     
                     char absPath[260]; int rIdx; ResolvePath(loadedCFile, refPath, absPath);
-                    if (!loadedCFile[0] || _stricmp(absPath, loadedCFile) != 0) {
+                    if (!loadedCFile[0] || stricmp(absPath, loadedCFile) != 0) {
                         rIdx = EnsureRefLoaded(absPath);
                         if (rIdx != -1) {
                             double lcx = (refCache[rIdx]->minX + refCache[rIdx]->maxX) / 2.0;
@@ -764,7 +768,7 @@ void CalcBoundingBox(Shape** shapes, int count, double* outMinX, double* outMinY
     *outMinX = minX; *outMinY = minY; *outMaxX = maxX; *outMaxY = maxY;
 }
 
-void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, double offY, double minX, double minY, double pt_h, double iconPageScale) {
+void DrawPDFShape(FILE* f, long* len, Shape FAR* sh, double pageScale, double offX, double offY, double minX, double minY, double pt_h, double iconPageScale) {
     if (sh->type == 3) {
         char refPath[260]; double rScale = 1.0, rRot = 0.0;
         char *pScale, *pRot, *pEnd; int pathLen;
@@ -782,7 +786,7 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
         
         char absPath[260]; int rIdx;
         ResolvePath(loadedCFile, refPath, absPath);
-        if (loadedCFile[0] && _stricmp(absPath, loadedCFile) == 0) return; 
+        if (loadedCFile[0] && stricmp(absPath, loadedCFile) == 0) return; 
         rIdx = EnsureRefLoaded(absPath);
         if (rIdx != -1) {
             double lcx = (refCache[rIdx]->minX + refCache[rIdx]->maxX) / 2.0;
@@ -794,11 +798,11 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
             int currentPt = 6;
 
             for (r = 0; r < refCache[rIdx]->shapeCount; r++) {
-                Shape* sub = refCache[rIdx]->shapes[r];
+                Shape FAR* sub = refCache[rIdx]->shapes[r];
                 
                 if (sub->type == 3) {
                     if (g_RenderRefDepth < 3 && strncmp(sub->text, "{{EXT_REF=", 10) == 0) {
-                        Shape* tempRef = (Shape*)calloc(1, sizeof(Shape));
+                        Shape FAR* tempRef = (Shape FAR*)GlobalAllocPtr(GHND, sizeof(Shape));
                         if (tempRef) {
                             char subPath[260]; double subSc = 1.0, subRot = 0.0;
                             char *spS = strstr(sub->text, " scale="), *spR = strstr(sub->text, " rot="), *spE = strstr(sub->text, "}}");
@@ -830,14 +834,14 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
                                     }
                                 }
                             }
-                            free(tempRef);
+                            GlobalFreePtr(tempRef);
                         }
                     }
                     continue;
                 }
 
                 if (sub->type == 4) {
-                    Shape* tShp = (Shape*)calloc(1, sizeof(Shape));
+                    Shape FAR* tShp = (Shape FAR*)GlobalAllocPtr(GHND, sizeof(Shape));
                     if (tShp) {
                         char tagBuf[128];
                         double dx = (sub->ptsX[0] - lcx) * rScale, dy = (sub->ptsY[0] - lcy) * rScale;
@@ -868,11 +872,11 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
                         tShp->fontSize = sub->fontSize > 0 ? (int)(sub->fontSize * rScale) : (int)(24 * rScale);
                         tShp->strokeWidth = sub->strokeWidth > 0 ? (int)(sub->strokeWidth * rScale) : (int)(1 * rScale);
                         DrawPDFShape(f, len, tShp, pageScale, offX, offY, minX, minY, pt_h, iconPageScale);
-                        free(tShp);
+                        GlobalFreePtr(tShp);
                     }
                     refTagIdx++;
                 } else {
-                    Shape* tmpShp = (Shape*)calloc(1, sizeof(Shape));
+                    Shape FAR* tmpShp = (Shape FAR*)GlobalAllocPtr(GHND, sizeof(Shape));
                     if (tmpShp) {
                         int pIdx;
                         *tmpShp = *sub;
@@ -887,7 +891,7 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
                         }
                         tmpShp->strokeWidth = sub->strokeWidth > 0 ? (int)(sub->strokeWidth * rScale) : (int)(1 * rScale);
                         DrawPDFShape(f, len, tmpShp, pageScale, offX, offY, minX, minY, pt_h, iconPageScale);
-                        free(tmpShp);
+                        GlobalFreePtr(tmpShp);
                     }
                 }
             }
@@ -955,7 +959,7 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
     }
 }
 
-void DrawPDFDimensions(FILE* f, long* stream_len, Dimension* dims, int dimCount, Shape** shapes, int shapeCount, double pageScale, double offX, double offY, double minX, double minY, double pt_h, const char* unitName, double rScale, double cosR, double sinR, double objCx, double objCy, double lcx, double lcy) {
+void DrawPDFDimensions(FILE* f, long* stream_len, Dimension* dims, int dimCount, Shape FAR* FAR* shapes, int shapeCount, double pageScale, double offX, double offY, double minX, double minY, double pt_h, const char* unitName, double rScale, double cosR, double sinR, double objCx, double objCy, double lcx, double lcy) {
     int i;
     for (i = 0; i < dimCount; i++) {
         double lA1x, lA1y, lA2x, lA2y, lD1x, lD1y, lD2x, lD2y;
@@ -1222,13 +1226,13 @@ void CreatePDFAction(HWND hwnd) {
             strcpy(final_out, out_path);
         } else {
             char cwd[MAX_PATH];
-            if (_getcwd(cwd, MAX_PATH)) {
+            if (getcwd(cwd, MAX_PATH)) {
                 sprintf(final_out, "%s\\%s", cwd, out_path);
             } else {
                 strcpy(final_out, out_path);
             }
         }
-        if (!strrchr(final_out, '.') || _stricmp(strrchr(final_out, '.'), ".pdf") != 0) {
+        if (!strrchr(final_out, '.') || stricmp(strrchr(final_out, '.'), ".pdf") != 0) {
             strcat(final_out, ".pdf");
         }
     }
@@ -1246,7 +1250,7 @@ void CreatePDFAction(HWND hwnd) {
     }
 }
 
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK __export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch(msg) {
         case WM_CREATE: {
             DragAcceptFiles(hwnd, TRUE);
@@ -1304,7 +1308,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 // --- Entry Point ---
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     WNDCLASS wc; MSG msg; 
     
     /* CLI Mode: Quietly process the file without loading the GUI */
@@ -1324,7 +1328,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
         
         if (in_path[0]) {
-            if (_getcwd(cwd, 260)) {
+            if (getcwd(cwd, 260)) {
                 strcat(cwd, "\\dummy.c"); 
             } else {
                 cwd[0] = '\0';
