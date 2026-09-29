@@ -10,7 +10,6 @@
  * ============================================================================ */
 
 #pragma library("commdlg.lib")
-
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -22,7 +21,6 @@
 #include <direct.h>
 #include <shellapi.h>
 #include <stdarg.h>
-
 void WriteLog(const char* fmt, ...) {
 return;
     FILE* f = fopen("debug.log", "a");
@@ -39,11 +37,9 @@ return;
 #ifndef PI
 #define PI 3.14159265358979323846
 #endif
-
 #ifndef WM_APP
 #define WM_APP 0x8000
 #endif
-
 #define GRID_SIZE 32
 #define MAX_POINTS 64
 #define MAX_SHAPES 40
@@ -54,12 +50,10 @@ return;
 #define MAX_DIMS 32
 #define MAX_REFS 10
 #define MAX_EDIT_TAGS 64
-
 /* C89 Math & Color Macros */
 #define fmax(a,b) (((a)>(b))?(a):(b))
 #define fmin(a,b) (((a)<(b))?(a):(b))
 #define round(x) ((double)((long)((x) + ((x)>=0 ? 0.5 : -0.5))))
-
 typedef struct { 
     int type; 
     double ptsX[MAX_POINTS]; 
@@ -340,7 +334,7 @@ void EscapeCString(const char* in, char* out, int maxLen) {
     *out = '\0';
 }
 
-#pragma code_seg ( "IO_TEXT" );
+#pragma code_seg ( "WND_TEXT" );
 int EnsureRefLoaded(const char* path) {
     int i, j;
     double minX = 99999.0, minY = 99999.0;
@@ -1940,7 +1934,6 @@ void DoSaveFile(HWND hwnd) {
 }
 
 #pragma code_seg ( "SVG_TEXT" );
-
 /* --- SVG Logic --- */
 void MatMul(double* A, double* B, double* out) {
     out[0] = A[0]*B[0] + A[2]*B[1];
@@ -3235,6 +3228,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             int hitDimDrag, hitDimCycle;
             int x, y, cx;
             int tagHit;
+            int pass;
 
             x = (int)(short)LOWORD(lParam); 
             y = (int)(short)HIWORD(lParam); 
@@ -3242,12 +3236,6 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             isPartialSelection = 0;
             hitDimDrag = -1; hitDimCycle = -1;
             tagHit = -1;
-
-            if (x >= cx && x < cx + 256 && y >= 382 && y < 414) {
-                currentFill = palette[((y - 382) / 16) * 8 + (x - cx) / 32]; useFill = 1;
-                if (selectedShape != -1) { SaveState(); shapes[selectedShape].fill = currentFill; shapes[selectedShape].useFill = 1; }
-                InvalidateRect(hwnd, NULL, TRUE); return 0;
-            }
 
             if (currentMode == 7) { 
                 dragType = 5; panStartX = x; panStartY = y; 
@@ -3332,36 +3320,42 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 }
 
                 if (hitS == -1) {
-                    if (selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type != 3 && shapes[selectedShape].type != 4) {
-                        for (j = 0; j < shapes[selectedShape].ptCount; j++) {
-                            int px = (int)round(shapes[selectedShape].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
-                            int py = (int)round(shapes[selectedShape].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
-                            if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = selectedShape; hitP = j; break; }
-                        }
-                    }
-                    if (hitS == -1) {
-                        for (i = shapeCount - 1; i >= 0; i--) {
-                            if (shapes[i].type == 3 || shapes[i].type == 4) continue;
-                            for (j = 0; j < shapes[i].ptCount; j++) {
-                                int px = (int)round(shapes[i].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
-                                int py = (int)round(shapes[i].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
-                                if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = i; hitP = j; break; }
+                    for (pass = 0; pass < 2 && hitS == -1; pass++) {
+                        if (selectedShape != -1 && selectedShape < shapeCount && ((pass == 0 && shapes[selectedShape].type != 3) || (pass == 1 && shapes[selectedShape].type == 3))) {
+                            for (j = 0; j < shapes[selectedShape].ptCount; j++) {
+                                int px = (int)round(shapes[selectedShape].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
+                                int py = (int)round(shapes[selectedShape].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
+                                if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = selectedShape; hitP = j; break; }
                             }
-                            if (hitS != -1) break;
+                        }
+                        if (hitS == -1) {
+                            for (i = shapeCount - 1; i >= 0; i--) {
+                                if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                                if (shapes[i].type == 4) continue;
+                                for (j = 0; j < shapes[i].ptCount; j++) {
+                                    int px = (int)round(shapes[i].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
+                                    int py = (int)round(shapes[i].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
+                                    if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = i; hitP = j; break; }
+                                }
+                                if (hitS != -1) break;
+                            }
                         }
                     }
                 }
 
                 if (hitS == -1) {
-                    if (selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type == 0) {
-                        if (PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[selectedShape])) { hitS = selectedShape; hitP = -1; }
-                    }
-                    if (hitS == -1) {
-                        for (i = shapeCount - 1; i >= 0; i--) { 
-                            if (shapes[i].type == 0 && PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[i])) { 
-                                hitS = i; hitP = -1; break; 
+                    for (pass = 0; pass < 2 && hitS == -1; pass++) {
+                        if (pass == 0 && selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type == 0) {
+                            if (PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[selectedShape])) { hitS = selectedShape; hitP = -1; }
+                        }
+                        if (hitS == -1) {
+                            for (i = shapeCount - 1; i >= 0; i--) { 
+                                if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                                if (shapes[i].type == 0 && PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[i])) { 
+                                    hitS = i; hitP = -1; break; 
+                                } 
                             } 
-                        } 
+                        }
                     }
                 }
 
@@ -3434,7 +3428,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     
                     if (currentMode == 1 || currentMode == 2) {
                         ClearSelection();
-                        if (shapes[hitS].type == 3 || shapes[hitS].type == 4) ToggleSelection(hitS, 0);
+                        if (shapes[hitS].type == 4) ToggleSelection(hitS, 0);
                         else for(j = 0; j < shapes[hitS].ptCount; j++) ToggleSelection(hitS, j);
                         selectedShape = hitS;
                     } else {
@@ -3458,7 +3452,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                                 if (!ptSelected[hitS][hitP]) { 
                                     ClearSelection(); 
                                     if (currentMode == 1 || currentMode == 2) {
-                                        if (shapes[hitS].type == 3 || shapes[hitS].type == 4) ToggleSelection(hitS, 0);
+                                        if (shapes[hitS].type == 4) ToggleSelection(hitS, 0);
                                         else for(j = 0; j < shapes[hitS].ptCount; j++) ToggleSelection(hitS, j);
                                     } else {
                                         ToggleSelection(hitS, hitP); 
@@ -3467,7 +3461,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                             } 
                             else if (!sHasSel) { 
                                 ClearSelection(); 
-                                if (shapes[hitS].type == 3 || shapes[hitS].type == 4) ToggleSelection(hitS, 0);
+                                if (shapes[hitS].type == 4) ToggleSelection(hitS, 0);
                                 else for(j = 0; j < shapes[hitS].ptCount; j++) ToggleSelection(hitS, j); 
                             }
                         }
@@ -3553,7 +3547,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         }
         case WM_MOUSEMOVE: {
             double nx, ny, dx, dy, bestDist, prX, prY, d, newX, newY, minX, maxX, minY, maxY;
-            int x, y, i, j, p, np, ctrlDown, shiftDown;
+            int x, y, i, j, p, np, ctrlDown, shiftDown, pass;
             double diff, ox, oy, d1, d2, scale, actualDx, actualDy;
             double exactX, exactY;
             
@@ -3739,11 +3733,14 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                                             sprintf(shapes[i].text, "{{EXT_REF=%s scale=%.2f rot=%.2f}}", refPath, rSc, newRot);
                                             ResolvePath(loadedCFile[0] ? loadedCFile : "", refPath, absPath); rIdx = EnsureRefLoaded(absPath);
                                             if (rIdx != -1) { lcx = (refCache[rIdx].minX + refCache[rIdx].maxX) / 2.0; lcy = (refCache[rIdx].minY + refCache[rIdx].maxY) / 2.0; }
-                                            oldCx = dragStartSnapshot[i].ptsX[0] + lcx; oldCy = dragStartSnapshot[i].ptsY[0] + lcy;
+                                            oldCx = dragStartSnapshot[i].ptsX[0] + lcx * rSc; 
+                                            oldCy = dragStartSnapshot[i].ptsY[0] + lcy * rSc;
                                             newCx = shapeCx + (oldCx - shapeCx) * cos(diff) - (oldCy - shapeCy) * sin(diff);
                                             newCy = shapeCy + (oldCx - shapeCx) * sin(diff) + (oldCy - shapeCy) * cos(diff);
-                                            newX2 = newCx - lcx; newY2 = newCy - lcy;
-                                            shapes[i].ptsX[0] = snapToGrid ? round(newX2) : newX2; shapes[i].ptsY[0] = snapToGrid ? round(newY2) : newY2;
+                                            newX2 = newCx - lcx * rSc; 
+                                            newY2 = newCy - lcy * rSc;
+                                            shapes[i].ptsX[0] = snapToGrid ? round(newX2) : newX2; 
+                                            shapes[i].ptsY[0] = snapToGrid ? round(newY2) : newY2;
                                         }
                                     }
                                 }
@@ -3803,38 +3800,35 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             } else if (currentMode == 0 || currentMode == 1 || currentMode == 2 || currentMode == 27) {
                 hoverShape = -1; hoverPt = -1; hoverSegShape = -1; hoverSegPt = -1; bestDist = 99999.0;
                 
-                if (selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type != 3 && shapes[selectedShape].type != 4) {
-                    for (p = 0; p < shapes[selectedShape].ptCount; p++) {
-                        d = sqrt(pow(shapes[selectedShape].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[selectedShape].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
-                        if (d < 15.0 && d < bestDist) { hoverShape = selectedShape; hoverPt = p; bestDist = d; }
-                    }
-                }
-                if (hoverPt == -1) {
-                    for (i = 0; i < shapeCount; i++) {
-                        if (shapes[i].type == 3 || shapes[i].type == 4) continue;
-                        for (p = 0; p < shapes[i].ptCount; p++) {
-                            d = sqrt(pow(shapes[i].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[i].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
-                            if (d < 15.0 && d < bestDist) { hoverShape = i; hoverPt = p; bestDist = d; }
+                for (pass = 0; pass < 2 && hoverPt == -1; pass++) {
+                    if (selectedShape != -1 && selectedShape < shapeCount && ((pass == 0 && shapes[selectedShape].type != 3) || (pass == 1 && shapes[selectedShape].type == 3))) {
+                        for (p = 0; p < shapes[selectedShape].ptCount; p++) {
+                            d = sqrt(pow(shapes[selectedShape].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[selectedShape].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
+                            if (d < 15.0 && d < bestDist) { hoverShape = selectedShape; hoverPt = p; bestDist = d; }
                         }
                     }
-                }
-                if (hoverPt == -1) {
-                    bestDist = 99999.0;
-                    for (i = 0; i < shapeCount; i++) {
-                        if (shapes[i].type == 3 || shapes[i].type == 4 || shapes[i].ptCount >= MAX_POINTS) continue;
-                        for (p = 0; p < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); p++) {
-                            np = (p + 1) % shapes[i].ptCount;
-                            PtToSegProj((double)exactX, (double)exactY, shapes[i].ptsX[p], shapes[i].ptsY[p], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
-                            if (d < (10.0 / scaleFactor) && d < bestDist) { hoverSegShape = i; hoverSegPt = p; hoverProjX = prX; hoverProjY = prY; bestDist = d; }
-                        }
-                    }
-                }
-                if (hoverPt == -1 && hoverSegShape == -1 && currentMode == 27) {
-                    for (i = 0; i < shapeCount; i++) {
-                        if (shapes[i].type == 3) {
+                    if (hoverPt == -1) {
+                        for (i = 0; i < shapeCount; i++) {
+                            if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                            if (shapes[i].type == 4) continue;
                             for (p = 0; p < shapes[i].ptCount; p++) {
                                 d = sqrt(pow(shapes[i].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[i].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
                                 if (d < 15.0 && d < bestDist) { hoverShape = i; hoverPt = p; bestDist = d; }
+                            }
+                        }
+                    }
+                }
+
+                if (hoverPt == -1) {
+                    bestDist = 99999.0;
+                    for (pass = 0; pass < 2 && hoverSegShape == -1; pass++) {
+                        for (i = 0; i < shapeCount; i++) {
+                            if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                            if (shapes[i].type == 4 || shapes[i].ptCount >= MAX_POINTS) continue;
+                            for (p = 0; p < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); p++) {
+                                np = (p + 1) % shapes[i].ptCount;
+                                PtToSegProj((double)exactX, (double)exactY, shapes[i].ptsX[p], shapes[i].ptsY[p], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
+                                if (d < (10.0 / scaleFactor) && d < bestDist) { hoverSegShape = i; hoverSegPt = p; hoverProjX = prX; hoverProjY = prY; bestDist = d; }
                             }
                         }
                     }
@@ -3955,7 +3949,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             break;
         }
         case WM_LBUTTONDBLCLK: {
-            int x, y, i, j, k, p, s, np, tagHit;
+            int x, y, i, j, k, p, s, np, tagHit, pass;
             int foundSegS, foundSegP;
             double exactX, exactY, bestDist, d, prX, prY, foundPrX, foundPrY;
             double A1x, A1y, A2x, A2y, D1x, D1y, D2x, D2y, midX, midY, val;
@@ -4019,13 +4013,16 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 foundPrX = 0; foundPrY = 0;
                 foundSegS = -1; foundSegP = -1;
                 
-                for (i = shapeCount - 1; i >= 0; i--) {
-                    if (shapes[i].type == 3 || shapes[i].type == 4 || shapes[i].ptCount < 2) continue;
-                    for (j = 0; j < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); j++) {
-                        np = (j + 1) % shapes[i].ptCount;
-                        PtToSegProj(exactX, exactY, shapes[i].ptsX[j], shapes[i].ptsY[j], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
-                        if (d < (10.0 / scaleFactor) && d < bestDist) { 
-                            foundSegS = i; foundSegP = j; foundPrX = prX; foundPrY = prY; bestDist = d; 
+                for (pass = 0; pass < 2 && foundSegS == -1; pass++) {
+                    for (i = shapeCount - 1; i >= 0; i--) {
+                        if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                        if (shapes[i].type == 4 || shapes[i].ptCount < 2) continue;
+                        for (j = 0; j < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); j++) {
+                            np = (j + 1) % shapes[i].ptCount;
+                            PtToSegProj(exactX, exactY, shapes[i].ptsX[j], shapes[i].ptsY[j], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
+                            if (d < (10.0 / scaleFactor) && d < bestDist) { 
+                                foundSegS = i; foundSegP = j; foundPrX = prX; foundPrY = prY; bestDist = d; 
+                            }
                         }
                     }
                 }
@@ -4085,8 +4082,27 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (distEditMode == 0 && selOrderCount == 2) {
                 s1 = selOrderS[0]; p1 = selOrderP[0]; s2 = selOrderS[1]; p2 = selOrderP[1];
                 dx = shapes[s2].ptsX[p2] - shapes[s1].ptsX[p1]; dy = shapes[s2].ptsY[p2] - shapes[s1].ptsY[p1];
-                SaveState(); shapes[s2].ptsX[p2] = shapes[s1].ptsX[p1] + dx * (newDist / sqrt(dx*dx + dy*dy)); 
-                shapes[s2].ptsY[p2] = shapes[s1].ptsY[p1] + dy * (newDist / sqrt(dx*dx + dy*dy));
+                oldVal = sqrt(dx*dx + dy*dy);
+                if (oldVal > 0.0001) {
+                    SaveState(); 
+                    double nX = shapes[s1].ptsX[p1] + dx * (newDist / oldVal); 
+                    double nY = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
+                    double deltaX = nX - shapes[s2].ptsX[p2];
+                    double deltaY = nY - shapes[s2].ptsY[p2];
+                    
+                    if (lockAxis && s1 == s2) {
+                        for(p = 0; p < shapes[s2].ptCount; p++) {
+                            double t = ((shapes[s2].ptsX[p] - shapes[s1].ptsX[p1])*dx + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1])*dy) / (oldVal*oldVal);
+                            if (t >= 0.5) {
+                                shapes[s2].ptsX[p] += deltaX;
+                                shapes[s2].ptsY[p] += deltaY;
+                            }
+                        }
+                    } else {
+                        shapes[s2].ptsX[p2] = nX; 
+                        shapes[s2].ptsY[p2] = nY;
+                    }
+                }
             } else if ((distEditMode == 1 || distEditMode == 2) && selectedShape != -1) {
                 minX = 9999; maxX = -9999; minY = 9999; maxY = -9999;
                 for(p=0; p<shapes[selectedShape].ptCount; p++) { minX = fmin(minX, shapes[selectedShape].ptsX[p]); maxX = fmax(maxX, shapes[selectedShape].ptsX[p]); minY = fmin(minY, shapes[selectedShape].ptsY[p]); maxY = fmax(maxY, shapes[selectedShape].ptsY[p]); }
@@ -4157,13 +4173,46 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 
                 if (oldVal > 0.0001) {
                     SaveState();
+                    double nX = shapes[s2].ptsX[p2];
+                    double nY = shapes[s2].ptsY[p2];
+
                     if (dptr->mode == 0) {
-                        shapes[s2].ptsX[p2] = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
-                        shapes[s2].ptsY[p2] = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
+                        nX = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
+                        nY = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
                     } else if (dptr->mode == 1) {
-                        shapes[s2].ptsX[p2] = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
+                        nX = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
                     } else {
-                        shapes[s2].ptsY[p2] = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
+                        nY = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
+                    }
+
+                    double deltaX = nX - shapes[s2].ptsX[p2];
+                    double deltaY = nY - shapes[s2].ptsY[p2];
+
+                    if (lockAxis && s1 == s2) {
+                        for(p = 0; p < shapes[s2].ptCount; p++) {
+                            double t = 0.0;
+                            if (dptr->mode == 0) {
+                                t = ((shapes[s2].ptsX[p] - shapes[s1].ptsX[p1])*dx + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1])*dy) / (oldVal*oldVal);
+                            } else if (dptr->mode == 1) {
+                                t = (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) / dx;
+                            } else {
+                                t = (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) / dy;
+                            }
+                            
+                            if (t >= 0.5) {
+                                if (dptr->mode == 0) {
+                                    shapes[s2].ptsX[p] += deltaX;
+                                    shapes[s2].ptsY[p] += deltaY;
+                                } else if (dptr->mode == 1) {
+                                    shapes[s2].ptsX[p] += deltaX;
+                                } else {
+                                    shapes[s2].ptsY[p] += deltaY;
+                                }
+                            }
+                        }
+                    } else {
+                        if (dptr->mode == 0 || dptr->mode == 1) shapes[s2].ptsX[p2] = nX;
+                        if (dptr->mode == 0 || dptr->mode == 2) shapes[s2].ptsY[p2] = nY;
                     }
                 }
                 editDimIdx = -1;
@@ -4405,8 +4454,8 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 }
                 else if (btnId == 17) { 
                     int distinctShapes[2]; int distinctCount = 0;
-                    int s1, s2, edgeCount, fCount, loopsFound, loopStartIdx, firstEdge, found, cleanCnt;
-                    double cx, cy;
+                    int s1_idx, s2_idx, edgeCount, fCount, loopsFound, loopStartIdx, firstEdge, found, cleanCnt;
+                    double cx_d, cy_d;
                     double *clnX, *clnY; Edge *pool, *filtered; int *keep, *used;
                     static Shape merged;
 
@@ -4417,7 +4466,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     }
 
                     if (distinctCount == 2 && shapes[distinctShapes[0]].type == 0 && shapes[distinctShapes[1]].type == 0) {
-                        s1 = distinctShapes[0]; s2 = distinctShapes[1]; edgeCount = 0; fCount = 0; loopsFound = 0;
+                        s1_idx = distinctShapes[0]; s2_idx = distinctShapes[1]; edgeCount = 0; fCount = 0; loopsFound = 0;
                         clnX = (double*)GlobalAllocPtr(GHND, MAX_POINTS * sizeof(double));
                         clnY = (double*)GlobalAllocPtr(GHND, MAX_POINTS * sizeof(double));
                         pool = (Edge*)GlobalAllocPtr(GHND, 1024 * sizeof(Edge));
@@ -4427,8 +4476,8 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         
                         if (pool && filtered && keep && used && clnX && clnY) {
                             SaveState(); 
-                            AddEdgesFromShape(&shapes[s1], &shapes[s2], pool, &edgeCount); 
-                            AddEdgesFromShape(&shapes[s2], &shapes[s1], pool, &edgeCount);
+                            AddEdgesFromShape(&shapes[s1_idx], &shapes[s2_idx], pool, &edgeCount); 
+                            AddEdgesFromShape(&shapes[s2_idx], &shapes[s1_idx], pool, &edgeCount);
                             
                             for(i=0; i<edgeCount; i++) keep[i] = 1;
                             for(i=0; i<edgeCount; i++) {
@@ -4445,7 +4494,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                             for(i=0; i<edgeCount; i++) if (keep[i]) filtered[fCount++] = pool[i];
                             
                             if (fCount > 0) {
-                                merged = shapes[s1]; merged.ptCount = 0; 
+                                merged = shapes[s1_idx]; merged.ptCount = 0; 
                                 memset(used, 0, 1024 * sizeof(int));
                                 
                                 while(1) {
@@ -4453,18 +4502,18 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                                     for(j=0; j<fCount; j++) if(!used[j]) { firstEdge = j; break; }
                                     if (firstEdge == -1) break;
                                     
-                                    cx = filtered[firstEdge].x1; cy = filtered[firstEdge].y1;
+                                    cx_d = filtered[firstEdge].x1; cy_d = filtered[firstEdge].y1;
                                     loopStartIdx = merged.ptCount;
                                     
                                     while(1) {
                                         found = -1;
                                         if (merged.ptCount >= MAX_POINTS - 2) break;
-                                        merged.ptsX[merged.ptCount] = cx; merged.ptsY[merged.ptCount] = cy; merged.ptCount++;
+                                        merged.ptsX[merged.ptCount] = cx_d; merged.ptsY[merged.ptCount] = cy_d; merged.ptCount++;
                                         
                                         for (j=0; j<fCount; j++) {
                                             if (!used[j]) {
-                                                if (fabs(filtered[j].x1 - cx) < 1e-4 && fabs(filtered[j].y1 - cy) < 1e-4) { found = j; cx = filtered[j].x2; cy = filtered[j].y2; break; }
-                                                if (fabs(filtered[j].x2 - cx) < 1e-4 && fabs(filtered[j].y2 - cy) < 1e-4) { found = j; cx = filtered[j].x1; cy = filtered[j].y1; break; }
+                                                if (fabs(filtered[j].x1 - cx_d) < 1e-4 && fabs(filtered[j].y1 - cy_d) < 1e-4) { found = j; cx_d = filtered[j].x2; cy_d = filtered[j].y2; break; }
+                                                if (fabs(filtered[j].x2 - cx_d) < 1e-4 && fabs(filtered[j].y2 - cy_d) < 1e-4) { found = j; cx_d = filtered[j].x1; cy_d = filtered[j].y1; break; }
                                             }
                                         }
                                         if (found != -1) used[found] = 1; else break;
@@ -4483,8 +4532,8 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                                 merged.ptCount = cleanCnt; for(i=0; i<cleanCnt; i++) { merged.ptsX[i]=clnX[i]; merged.ptsY[i]=clnY[i]; }
                                 
                                 {
-                                    int keepIdx = (s1 < s2) ? s1 : s2;
-                                    int delIdx = (s1 > s2) ? s1 : s2;
+                                    int keepIdx = (s1_idx < s2_idx) ? s1_idx : s2_idx;
+                                    int delIdx = (s1_idx > s2_idx) ? s1_idx : s2_idx;
                                     
                                     shapes[keepIdx] = merged;
 
@@ -4622,7 +4671,6 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return 0L;
 }
 #pragma code_seg ();
-
 int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLine, int nCmdShow) {
     MSG msg; WNDCLASS wc; hInst = hInstance;
     if (!hPrevInstance) {
