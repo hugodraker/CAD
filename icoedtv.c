@@ -3341,10 +3341,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         SaveState(); shapes[hitS].useFill = (shapes[hitS].useFill + 1) % 3; RedrawCanvas(hwnd); return 0;
                     }
                 }
-
-                if (hitS == -1) {
-                    if (selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type != 3 && shapes[selectedShape].type != 4) {
-                        for (j = 0; j < shapes[selectedShape].ptCount; j++) {
+if (hitS == -1) {
+                    if (selectedShape != -1 && selectedShape < shapeCount) {
+                        int maxP = (shapes[selectedShape].type == 3 || shapes[selectedShape].type == 4) ? 1 : shapes[selectedShape].ptCount;
+                        for (j = 0; j < maxP; j++) {
                             int px = (int)round(shapes[selectedShape].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
                             int py = (int)round(shapes[selectedShape].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
                             if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = selectedShape; hitP = j; break; }
@@ -3352,8 +3352,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                     if (hitS == -1) {
                         for (i = shapeCount - 1; i >= 0; i--) {
-                            if (shapes[i].type == 3 || shapes[i].type == 4) continue;
-                            for (j = 0; j < shapes[i].ptCount; j++) {
+                            int maxP = (shapes[i].type == 3 || shapes[i].type == 4) ? 1 : shapes[i].ptCount;
+                            for (j = 0; j < maxP; j++) {
                                 int px = (int)round(shapes[i].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
                                 int py = (int)round(shapes[i].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
                                 if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = i; hitP = j; break; }
@@ -3739,7 +3739,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                 if (strncmp(dragStartSnapshot[i].text, "{{EXT_REF=", 10) == 0) {
                                     char* pS = strstr(dragStartSnapshot[i].text, " scale=");
                                     char* pR = strstr(dragStartSnapshot[i].text, " rot=");
-                                    if (pS) {
+if (pS) {
                                         int len = pS - (dragStartSnapshot[i].text + 10);
                                         if (len > 0 && len < 260) {
                                             double newRot, oldCx, oldCy, newCx, newCy, newX2, newY2, lcx = 0, lcy = 0; char absPath[260]; int rIdx;
@@ -3750,10 +3750,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                             sprintf(shapes[i].text, "{{EXT_REF=%s scale=%.2f rot=%.2f}}", refPath, rSc, newRot);
                                             ResolvePath(loadedCFile[0] ? loadedCFile : "", refPath, absPath); rIdx = EnsureRefLoaded(absPath);
                                             if (rIdx != -1) { lcx = (refCache[rIdx].minX + refCache[rIdx].maxX) / 2.0; lcy = (refCache[rIdx].minY + refCache[rIdx].maxY) / 2.0; }
-                                            oldCx = dragStartSnapshot[i].ptsX[0] + lcx; oldCy = dragStartSnapshot[i].ptsY[0] + lcy;
+                                            oldCx = dragStartSnapshot[i].ptsX[0] + lcx * rSc; 
+                                            oldCy = dragStartSnapshot[i].ptsY[0] + lcy * rSc;
                                             newCx = shapeCx + (oldCx - shapeCx) * cos(diff) - (oldCy - shapeCy) * sin(diff);
                                             newCy = shapeCy + (oldCx - shapeCx) * sin(diff) + (oldCy - shapeCy) * cos(diff);
-                                            newX2 = newCx - lcx; newY2 = newCy - lcy;
+                                            newX2 = newCx - lcx * rSc; 
+                                            newY2 = newCy - lcy * rSc;
                                             shapes[i].ptsX[0] = snapToGrid ? round(newX2) : newX2; shapes[i].ptsY[0] = snapToGrid ? round(newY2) : newY2;
                                         }
                                     }
@@ -3811,19 +3813,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     }
                 }
                 needsRedraw = 1;
-            } else if (currentMode == 0 || currentMode == 1 || currentMode == 2 || currentMode == 27) {
+} else if (currentMode == 0 || currentMode == 1 || currentMode == 2 || currentMode == 27) {
                 hoverShape = -1; hoverPt = -1; hoverSegShape = -1; hoverSegPt = -1; bestDist = 99999.0;
                 
-                if (selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type != 3 && shapes[selectedShape].type != 4) {
-                    for (p = 0; p < shapes[selectedShape].ptCount; p++) {
+                if (selectedShape != -1 && selectedShape < shapeCount) {
+                    int maxP = (shapes[selectedShape].type == 3 || shapes[selectedShape].type == 4) ? 1 : shapes[selectedShape].ptCount;
+                    for (p = 0; p < maxP; p++) {
                         d = sqrt(pow(shapes[selectedShape].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[selectedShape].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
                         if (d < 15.0 && d < bestDist) { hoverShape = selectedShape; hoverPt = p; bestDist = d; }
                     }
                 }
                 if (hoverPt == -1) {
                     for (i = 0; i < shapeCount; i++) {
-                        if (shapes[i].type == 3 || shapes[i].type == 4) continue;
-                        for (p = 0; p < shapes[i].ptCount; p++) {
+                        int maxP = (shapes[i].type == 3 || shapes[i].type == 4) ? 1 : shapes[i].ptCount;
+                        for (p = 0; p < maxP; p++) {
                             d = sqrt(pow(shapes[i].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[i].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
                             if (d < 15.0 && d < bestDist) { hoverShape = i; hoverPt = p; bestDist = d; }
                         }
@@ -4088,16 +4091,51 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             return 0;
         }
-        case WM_APP + 1: { 
+case WM_APP + 1: { 
             static char buf[512]; double newDist, dx, dy, minX, maxX, minY, maxY, cx, cy, oldVal, scale; 
             int p, s1, p1, s2, p2;
             GetWindowText(hDistEdit, buf, 512); newDist = atof(buf);
             
             if (distEditMode == 0 && selOrderCount == 2) {
                 s1 = selOrderS[0]; p1 = selOrderP[0]; s2 = selOrderS[1]; p2 = selOrderP[1];
-                dx = shapes[s2].ptsX[p2] - shapes[s1].ptsX[p1]; dy = shapes[s2].ptsY[p2] - shapes[s1].ptsY[p1];
-                SaveState(); shapes[s2].ptsX[p2] = shapes[s1].ptsX[p1] + dx * (newDist / sqrt(dx*dx + dy*dy)); 
-                shapes[s2].ptsY[p2] = shapes[s1].ptsY[p1] + dy * (newDist / sqrt(dx*dx + dy*dy));
+                dx = shapes[s2].ptsX[p2] - shapes[s1].ptsX[p1]; 
+                dy = shapes[s2].ptsY[p2] - shapes[s1].ptsY[p1];
+                oldVal = sqrt(dx*dx + dy*dy);
+                
+                if (oldVal > 0.0001) {
+                    double shiftX, shiftY;
+                    SaveState(); 
+                    scale = newDist / oldVal;
+                    shiftX = dx * scale - dx;
+                    shiftY = dy * scale - dy;
+                    
+                    if (lockAxis && s1 == s2) {
+                        if (p1 < p2) {
+                            for (p = 0; p < shapes[s2].ptCount; p++) {
+                                if (p > p1 && p < p2) {
+                                    shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
+                                    shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
+                                } else if (p >= p2) {
+                                    shapes[s2].ptsX[p] += shiftX;
+                                    shapes[s2].ptsY[p] += shiftY;
+                                }
+                            }
+                        } else {
+                            for (p = 0; p < shapes[s2].ptCount; p++) {
+                                if (p < p1 && p > p2) {
+                                    shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
+                                    shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
+                                } else if (p <= p2) {
+                                    shapes[s2].ptsX[p] += shiftX;
+                                    shapes[s2].ptsY[p] += shiftY;
+                                }
+                            }
+                        }
+                    } else {
+                        shapes[s2].ptsX[p2] += shiftX;
+                        shapes[s2].ptsY[p2] += shiftY;
+                    }
+                }
             } else if ((distEditMode == 1 || distEditMode == 2) && selectedShape != -1) {
                 minX = 9999; maxX = -9999; minY = 9999; maxY = -9999;
                 for(p=0; p<shapes[selectedShape].ptCount; p++) { minX = fmin(minX, shapes[selectedShape].ptsX[p]); maxX = fmax(maxX, shapes[selectedShape].ptsX[p]); minY = fmin(minY, shapes[selectedShape].ptsY[p]); maxY = fmax(maxY, shapes[selectedShape].ptsY[p]); }
@@ -4167,25 +4205,49 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 else oldVal = fabs(dy);
                 
                 if (oldVal > 0.0001) {
+                    double shiftX = 0, shiftY = 0;
                     SaveState();
+                    scale = newDist / oldVal;
+                    
                     if (dptr->mode == 0) {
-                        shapes[s2].ptsX[p2] = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
-                        shapes[s2].ptsY[p2] = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
+                        shiftX = dx * scale - dx;
+                        shiftY = dy * scale - dy;
                     } else if (dptr->mode == 1) {
-                        shapes[s2].ptsX[p2] = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
+                        shiftX = dx * scale - dx;
                     } else {
-                        shapes[s2].ptsY[p2] = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
+                        shiftY = dy * scale - dy;
+                    }
+                    
+                    if (lockAxis && s1 == s2) {
+                        if (p1 < p2) {
+                            for (p = 0; p < shapes[s2].ptCount; p++) {
+                                if (p > p1 && p < p2) {
+                                    if (dptr->mode == 0 || dptr->mode == 1) shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
+                                    if (dptr->mode == 0 || dptr->mode == 2) shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
+                                } else if (p >= p2) {
+                                    shapes[s2].ptsX[p] += shiftX;
+                                    shapes[s2].ptsY[p] += shiftY;
+                                }
+                            }
+                        } else {
+                            for (p = 0; p < shapes[s2].ptCount; p++) {
+                                if (p < p1 && p > p2) {
+                                    if (dptr->mode == 0 || dptr->mode == 1) shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
+                                    if (dptr->mode == 0 || dptr->mode == 2) shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
+                                } else if (p <= p2) {
+                                    shapes[s2].ptsX[p] += shiftX;
+                                    shapes[s2].ptsY[p] += shiftY;
+                                }
+                            }
+                        }
+                    } else {
+                        shapes[s2].ptsX[p2] += shiftX;
+                        shapes[s2].ptsY[p2] += shiftY;
                     }
                 }
                 editDimIdx = -1;
             }
             ShowWindow(hDistEdit, SW_HIDE); distEditMode = 0; RedrawCanvas(hwnd); SetFocus(hwnd); 
-            break;
-        }
-        case WM_APP + 2: {
-            SetWindowPos(hDistEdit, (HWND)0, canvasW_px/2, canvasH_px/2, 60, 20, SWP_SHOWWINDOW);
-            BringWindowToTop(hDistEdit);
-            SetFocus(hDistEdit);
             break;
         }
         case WM_COMMAND: {
