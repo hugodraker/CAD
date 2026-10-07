@@ -252,7 +252,7 @@ COLORREF currentStroke = RGB(0, 0, 0); int useStroke = 1;
 
 HINSTANCE hInst = NULL;
 HWND hMain, hStatus;
-HWND hBtn[33];
+HWND hBtn[36];
 HWND hBtnThickPlus, hBtnThickMinus; /* NEW Buttons */
 HWND hScrlSides, hScrlDepth, hScrlIcon;
 HWND hBtnAddIcon, hBtnDelIcon;
@@ -264,15 +264,17 @@ int distEditMode = 0;
 int paramSides = 4, paramStar = 100;
 int canvasSize = 320, scaleFactor = 10, clientW = 0, clientH = 0;
 
-const char* const bT[33] = {
+const char* const bT[36] = {
     "Select/Edit", "Rotate", "Scale", "Polygon", "Line",
     "Polyline", "Revert", "Pan", "Flood Fill", "Undo",
     "Clear", "Delete", "Import SVG", "Import Ref", "Open .C",
     "Save .C", "P<->L", "Merge", "Move Up", "Move Down",
     "Align Vert", "Align Horz", "Set Dist", "Set Width", "Set Height", 
     "Duplicate", "Set Angle", "Dimension", "Page Size", "Tag Editor", 
-    "Add Tag", "(Lock Axis)", "Show All"
+    "Add Tag", "(Lock Axis)", "Show All",
+    "ToRef", "FromRef", "Stub"
 };
+
 int lockAxis = 0;
 
 HWND hScrlZoom;
@@ -334,7 +336,7 @@ void EscapeCString(const char* in, char* out, int maxLen) {
     *out = '\0';
 }
 
-#pragma code_seg ( "WND_TEXT" );
+#pragma code_seg ( "UTIL_TEXT" );
 int EnsureRefLoaded(const char* path) {
     int i, j;
     double minX = 99999.0, minY = 99999.0;
@@ -2911,6 +2913,219 @@ void WriteShapeToC(FILE* f, Shape* s, int j) {
     }
 }
 
+
+void PASCAL CmdToRef(HWND hwnd) {
+    OPENFILENAME ofn; char szFile[260]; FILE* f;
+    int i, j, k, m, selCount = 0;
+    
+    for (i=0; i<shapeCount; i++) {
+        int isSel = (i == selectedShape);
+        if (!isSel) {
+            for(k=0; k<shapes[i].ptCount; k++) {
+                if (ptSelected[i][k]) { isSel = 1; break; }
+            }
+        }
+        if (isSel) selCount++;
+    }
+    if (selCount == 0) {
+        MessageBox(hwnd, "No items selected.", "ToRef", MB_OK | MB_ICONEXCLAMATION);
+        return;
+    }
+    
+    memset(&ofn, 0, sizeof(ofn)); szFile[0] = '\0';
+    ofn.lStructSize = sizeof(ofn); ofn.hwndOwner = hwnd;
+    ofn.lpstrFilter = "C Data Files (*.c)\0*.c\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = szFile; ofn.nMaxFile = sizeof(szFile);
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST; ofn.lpstrDefExt = "c";
+    
+    if (GetSaveFileName(&ofn)) {
+        if (IsRefFile(szFile)) { MessageBox(hwnd, "Cannot overwrite loaded reference.", "Error", MB_ICONHAND); return; }
+        
+        f = fopen(szFile, "w");
+        if (!f) return;
+        fprintf(f, "case 1: {\n");
+        for (i=0; i<shapeCount; i++) {
+            int isSel = (i == selectedShape);
+            if (!isSel) {
+                for(k=0; k<shapes[i].ptCount; k++) {
+                    if (ptSelected[i][k]) { isSel = 1; break; }
+                }
+            }
+            if (isSel) WriteShapeToC(f, &shapes[i], i);
+        }
+        fprintf(f, "    break;\n}\n");
+        fclose(f);
+        
+        SaveState();
+        
+        /* Remove selected shapes */
+        for (i=shapeCount-1; i>=0; i--) {
+            int isSel = (i == selectedShape);
+            if (!isSel) {
+                for(k=0; k<shapes[i].ptCount; k++) {
+                    if (ptSelected[i][k]) { isSel = 1; break; }
+                }
+            }
+            if (isSel) {
+                for(j=0; j<dimCount; ) {
+                    if (dims[j].s1 == i || dims[j].s2 == i) {
+                        for(m=j; m<dimCount-1; m++) dims[m] = dims[m+1];
+                        dimCount--;
+                    } else {
+                        if (dims[j].s1 > i) dims[j].s1--;
+                        if (dims[j].s2 > i) dims[j].s2--;
+                        j++;
+                    }
+                }
+                for(k=i; k<shapeCount-1; k++) shapes[k] = shapes[k+1];
+                shapeCount--;
+            }
+        }
+        
+        /* Insert the reference shape */
+        if (shapeCount < MAX_SHAPES) {
+            char relPath[260];
+            if (loadedCFile[0]) GetRelativePath(loadedCFile, szFile, relPath);
+            else strcpy(relPath, szFile);
+            
+            memset(&shapes[shapeCount], 0, sizeof(Shape));
+            shapes[shapeCount].type = 3; 
+            shapes[shapeCount].ptCount = 1; 
+            shapes[shapeCount].ptsX[0] = 0.0;
+            shapes[shapeCount].ptsY[0] = 0.0;
+            shapes[shapeCount].stroke = currentStroke;
+            sprintf(shapes[shapeCount].text, "{{EXT_REF=%s scale=1.00 rot=0.00}}", relPath);
+            shapeCount++;
+        }
+        
+        ClearSelection();
+        selectedShape = shapeCount - 1;
+        ToggleSelection(selectedShape, 0);
+        UpdateStatusBar();
+        RedrawCanvas(hwnd);
+    }
+}
+
+void PASCAL CmdFromRef(HWND hwnd) {
+    int i, j, k, m, rIdx;
+    Shape refShape;
+    double refScale = 1.0, refRot = 0.0;
+    char refPath[260]; char absPath[260]; char baseBase[260];
+    char *pScale, *pRot, *pEnd; int pathLen;
+    
+    if (selectedShape == -1 || shapes[selectedShape].type != 3) {
+        MessageBox(hwnd, "Select a valid reference shape first.", "FromRef", MB_OK | MB_ICONEXCLAMATION);
+        return;
+    }
+    refShape = shapes[selectedShape];
+    
+    pScale = strstr(refShape.text, " scale="); pRot = strstr(refShape.text, " rot="); pEnd = strstr(refShape.text, "}}");
+    if (pScale) pathLen = (int)(pScale - (refShape.text + 10));
+    else if (pEnd) pathLen = (int)(pEnd - (refShape.text + 10));
+    else pathLen = strlen(refShape.text + 10);
+    
+    if (pathLen <= 0 || pathLen >= 260) return;
+    strncpy(refPath, refShape.text + 10, pathLen); refPath[pathLen] = '\0';
+    while (pathLen > 0 && isspace((unsigned char)refPath[pathLen - 1])) refPath[--pathLen] = '\0';
+    
+    if (pScale) refScale = atof(pScale + 7);
+    if (pRot) refRot = atof(pRot + 5);
+    
+    GetResolveBase(baseBase);
+    ResolvePath(baseBase, refPath, absPath);
+    rIdx = EnsureRefLoaded(absPath);
+    
+    if (rIdx == -1) {
+        MessageBox(hwnd, "Could not load reference.", "FromRef", MB_OK | MB_ICONEXCLAMATION);
+        return;
+    }
+    
+    if (shapeCount - 1 + refCache[rIdx].shapeCount > MAX_SHAPES) {
+        MessageBox(hwnd, "Not enough space to unpack reference.", "FromRef", MB_OK | MB_ICONEXCLAMATION);
+        return;
+    }
+    
+    SaveState();
+    
+    i = selectedShape;
+    for(j=0; j<dimCount; ) {
+        if (dims[j].s1 == i || dims[j].s2 == i) {
+            for(m=j; m<dimCount-1; m++) dims[m] = dims[m+1];
+            dimCount--;
+        } else {
+            if (dims[j].s1 > i) dims[j].s1--;
+            if (dims[j].s2 > i) dims[j].s2--;
+            j++;
+        }
+    }
+    for(k=i; k<shapeCount-1; k++) shapes[k] = shapes[k+1];
+    shapeCount--;
+    
+    {
+        double lcx = (refCache[rIdx].minX + refCache[rIdx].maxX) / 2.0;
+        double lcy = (refCache[rIdx].minY + refCache[rIdx].maxY) / 2.0;
+        double objCx = refShape.ptsX[0] + lcx * refScale;
+        double objCy = refShape.ptsY[0] + lcy * refScale;
+        double rRad = refRot * PI / 180.0, cosR = cos(rRad), sinR = sin(rRad);
+        int refTagIdx = 0;
+        
+        ClearSelection();
+        
+        for(j=0; j<refCache[rIdx].shapeCount; j++) {
+            Shape sub = refCache[rIdx].shapes[j];
+            
+            if (sub.type == 4) {
+                double dx = (sub.ptsX[0] - lcx) * refScale;
+                double dy = (sub.ptsY[0] - lcy) * refScale;
+                sub.ptsX[0] = objCx + dx * cosR - dy * sinR;
+                sub.ptsY[0] = objCy + dx * sinR + dy * cosR;
+                sub.fontSize = (int)(sub.fontSize * refScale);
+                
+                {
+                    char instVal[128];
+                    GetPipeValue(refShape.tagData, refTagIdx, instVal, 128);
+                    if (strlen(instVal) > 0) strncpy(sub.text, instVal, 127);
+                }
+                refTagIdx++;
+            } else if (sub.type == 3) {
+                double dx = (sub.ptsX[0] - lcx) * refScale;
+                double dy = (sub.ptsY[0] - lcy) * refScale;
+                sub.ptsX[0] = objCx + dx * cosR - dy * sinR;
+                sub.ptsY[0] = objCy + dx * sinR + dy * cosR;
+                
+                {
+                    char nPath[260]; double nSc = 1.0, nRot = 0.0;
+                    char *nspS = strstr(sub.text, " scale="), *nspR = strstr(sub.text, " rot="), *nspE = strstr(sub.text, "}}");
+                    int nsLen;
+                    if (nspS) nsLen = (int)(nspS - (sub.text + 10)); else if (nspE) nsLen = (int)(nspE - (sub.text + 10)); else nsLen = strlen(sub.text + 10);
+                    strncpy(nPath, sub.text + 10, nsLen); nPath[nsLen] = '\0';
+                    if (nspS) nSc = atof(nspS + 7);
+                    if (nspR) nRot = atof(nspR + 5);
+                    sprintf(sub.text, "{{EXT_REF=%s scale=%.2f rot=%.2f}}", nPath, nSc * refScale, nRot + refRot);
+                }
+            } else {
+                for(k=0; k<sub.ptCount; k++) {
+                    double dx = (sub.ptsX[k] - lcx) * refScale;
+                    double dy = (sub.ptsY[k] - lcy) * refScale;
+                    sub.ptsX[k] = objCx + dx * cosR - dy * sinR;
+                    sub.ptsY[k] = objCy + dx * sinR + dy * cosR;
+                }
+            }
+            shapes[shapeCount] = sub;
+            ToggleSelection(shapeCount, 0);
+            selectedShape = shapeCount;
+            shapeCount++;
+        }
+    }
+    
+    UpdateStatusBar();
+    RedrawCanvas(hwnd);
+}
+
+void PASCAL CmdStub(HWND hwnd) {
+    MessageBeep(MB_OK);
+}
+
 #pragma code_seg ( "WND_TEXT" );
 LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     static double dragStartX = 0, dragStartY = 0;
@@ -2975,7 +3190,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             
             SwitchToIcon(0); 
             
-            for(i = 0; i < 33; i++) hBtn[i] = CreateWindow("BUTTON", bT[i], WS_CHILD|WS_VISIBLE, 0,0,1,1, hwnd, (HMENU)(200+i), hInst, NULL);
+            for(i = 0; i < 36; i++) hBtn[i] = CreateWindow("BUTTON", bT[i], WS_CHILD|WS_VISIBLE, 0,0,1,1, hwnd, (HMENU)(200+i), hInst, NULL);
             
             hDistEdit = CreateWindow("EDIT", "", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 0, 0, 60, 20, hwnd, (HMENU)300, hInst, NULL);
             subclassThunk = MakeProcInstance((FARPROC)DistEditProc, hInst);
@@ -3009,7 +3224,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             canvasW_px = scaleFactor * gridW; canvasH_px = scaleFactor * gridH;
             cx = clientW - PANEL_WIDTH + 15; w = PANEL_WIDTH - 30; by = 10;
             
-            for(i = 0; i < 33; i++) {
+            for(i = 0; i < 36; i++) {
                 if (hBtn[i]) MoveWindow(hBtn[i], cx + (i%3)*(w/3 + 2), by + (i/3)*26, (w/3)-4, 24, TRUE);
             }
             MoveWindow(hScrlSides, cx + 50, 466, w - 50, 18, TRUE);
@@ -4291,7 +4506,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 UpdateStatusBar(); SetFocus(hwnd); return 0;
             }
 
-            if (btnId >= 0 && btnId < 33) {
+            if (btnId >= 0 && btnId < 36) {
                 if (btnId >= 0 && btnId <= 5) { 
                     if (btnId == 1 && lockAxis) {
                         ShowStatus(" Rotation disabled while Lock Axis is on.");
@@ -4616,6 +4831,9 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         ShowStatus(" Select exactly 2 nodes to set angle.");
                     }
                 }
+                else if (btnId == 33) { CmdToRef(hwnd); }
+                else if (btnId == 34) { CmdFromRef(hwnd); }
+                else if (btnId == 35) { CmdStub(hwnd); }
             }
             if (id != 300 && (id < 222 || id > 224) && id != 226) SetFocus(hwnd); break;
         }
@@ -4670,6 +4888,7 @@ LRESULT FAR PASCAL _export WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     }
     return 0L;
 }
+
 #pragma code_seg ();
 int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLine, int nCmdShow) {
     MSG msg; WNDCLASS wc; hInst = hInstance;
