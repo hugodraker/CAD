@@ -1,5 +1,5 @@
 /* ============================================================================
- * DRA-PDF C-Icon to PDF Generator - Win32 GCC Implementation 
+ * DRA-PDF C GDI to PDF Generator - Win32 GCC Implementation 
  *
  * COMPILATION INSTRUCTIONS (GCC):
  *   gcc -Os -s -mwindows DRA-PDF.c -o DRA-PDF.exe -lcomdlg32 -lshell32
@@ -19,21 +19,17 @@
 #include <ctype.h>
 #include <direct.h>
 #include <stdarg.h>
-
 #ifndef PI
 #define PI 3.14159265358979323846
 #endif
-
 #ifndef MAX_PATH
 #define MAX_PATH 260
 #endif
-
 #define MAX_POINTS 64
 #define MAX_SHAPES 400
 #define MAX_ICONS 100
 #define MAX_REFS 20
 #define MAX_DIMS 32
-
 /* --- Data Structures --- */
 typedef struct {
     int s1, p1, s2, p2; 
@@ -55,6 +51,7 @@ typedef struct {
     int fontSize;
     char text[128]; 
     char tagData[128]; 
+    double rot; 
 } Shape;
 
 typedef struct { 
@@ -96,6 +93,10 @@ HWND hBtnCreate, hBtnExit, hStatus;
 int isLandscape = 1;
 float page_w_mm = 279.4f; 
 float page_h_mm = 215.9f;
+
+/* --- Direct PDF Disk Generation Engine --- */
+long pdf_objects[2048];
+int pdf_obj_cnt = 1;
 
 /* --- Forward Declarations --- */
 void FormatDimension(double val, const char* unit, char* outBuf);
@@ -234,7 +235,6 @@ void FreeAllData(void) {
     refCacheCount = 0;
 }
 
-/* --- C Parsing Engine --- */
 void SilentLoadC(const char* path, RefCache* ref) {
     FILE* f; long sz; char *d, *cur;
     ref->shapeCount = 0; ref->dimCount = 0;
@@ -256,14 +256,20 @@ void SilentLoadC(const char* path, RefCache* ref) {
         while (st < endBlock && ref->shapeCount < MAX_SHAPES) {
             char *pt = strstr(st, "POINT "), *lStr = strstr(st, "L(");
             char *ext = strstr(st, "EXT_REF("); 
-            char *tag = strstr(st, "TAG_TEXT("), *dim = strstr(st, "DIMENSION(");
+            char *tag = strstr(st, "TAG_TEXT(");
+            char *tagRot = strstr(st, "TAG_TEXT_ROT(");
+            char *dim = strstr(st, "DIMENSION(");
             char *pgDef = strstr(st, "PAGE_DEF(");
+            char *dTxt = strstr(st, "DRAW_TEXT(");
             char *colorSearch, *next = pt ? pt : lStr;
             Shape* s;
+
+            if (tagRot && (!tag || tagRot < tag)) tag = tagRot;
 
             if (lStr && (!next || lStr < next)) next = lStr;
             if (ext && (!next || ext < next)) next = ext; 
             if (tag && (!next || tag < next)) next = tag;
+            if (dTxt && (!next || dTxt < next)) next = dTxt;
             if (dim && (!next || dim < next)) next = dim;
             if (pgDef && (!next || pgDef < next)) next = pgDef;
             if (!next || next >= endBlock) break;
@@ -307,7 +313,7 @@ void SilentLoadC(const char* path, RefCache* ref) {
 
             memset(s, 0, sizeof(Shape));
             s->useFill = 0; s->useStroke = 1; s->fill = RGB(128, 128, 128); s->stroke = RGB(0, 0, 0);
-            s->strokeWidth = 1; s->fontSize = 24;
+            s->strokeWidth = 1; s->fontSize = 24; s->rot = 0.0;
 
             colorSearch = st;
             while (colorSearch < next) {
@@ -358,6 +364,31 @@ void SilentLoadC(const char* path, RefCache* ref) {
                     UnescapeCString(tagStr, s->tagData, 128);
                     ref->shapeCount++;
                 }
+            } else if (next == dTxt) {
+                char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                if (pOpen) {
+                    char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+                    char* c3 = c2 ? strchr(c2 + 1, ',') : NULL; char* c4 = c3 ? strchr(c3 + 1, ',') : NULL;
+                    if (c4 && (!q1 || c4 < q1)) {
+                        s->type = 5; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = atof(c1 + 1);
+                        s->ptsX[1] = atof(c2 + 1); s->ptsY[1] = atof(c3 + 1); s->ptCount = 2;
+                        char* pClose = strrchr(next, ')');
+                        if (q1 && q2 && q1 < pClose) {
+                            int tLen = q2 - (q1 + 1); if (tLen > 127) tLen = 127;
+                            static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0';
+                            UnescapeCString(rawTag, s->text, 128);
+                            char* commaAfter = strchr(q2, ',');
+                            if (commaAfter && commaAfter < pClose) {
+                                char jChar = 'L'; char* jPtr = commaAfter + 1;
+                                while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
+                                char* comma4 = strchr(commaAfter + 1, ',');
+                                if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                            } else s->useFill = 0;
+                        }
+                        ref->shapeCount++;
+                    }
+                }
             } else if (next == tag) {
                 char* pOpen = strchr(next, '(');
                 char* q1 = pOpen ? FindQuote(pOpen) : NULL;
@@ -382,7 +413,11 @@ void SilentLoadC(const char* path, RefCache* ref) {
                                 jChar = toupper((unsigned char)*jPtr);
                                 if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
                                 char* comma4 = strchr(commaAfter + 1, ',');
-                                if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                if (comma4 && comma4 < pClose) {
+                                    s->fontSize = atoi(comma4 + 1);
+                                    char* comma5 = strchr(comma4 + 1, ',');
+                                    if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                }
                             } else s->useFill = 0;
                         } else if (comma2) {
                             char* comma3 = strchr(comma2 + 1, ',');
@@ -400,7 +435,11 @@ void SilentLoadC(const char* path, RefCache* ref) {
                                     jChar = toupper((unsigned char)*jPtr);
                                     if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
                                     char* comma4 = strchr(comma3 + 1, ',');
-                                    if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                    if (comma4 && comma4 < pClose) {
+                                        s->fontSize = atoi(comma4 + 1);
+                                        char* comma5 = strchr(comma4 + 1, ',');
+                                        if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                    }
                                 } else s->useFill = 0;
                             }
                         }
@@ -474,14 +513,19 @@ int LoadCFile(const char* path) {
                 char* colorSearch; 
                 char *dim = strstr(st, "DIMENSION(");
                 char *pgDef = strstr(st, "PAGE_DEF(");
+                char *dTxt = strstr(st, "DRAW_TEXT(");
                 pt = strstr(st, "POINT "); lStr = strstr(st, "L(");
                 ext = strstr(st, "EXT_REF("); tag = strstr(st, "TAG_TEXT(");
+                char *tagRot = strstr(st, "TAG_TEXT_ROT(");
                 Shape* s;
+
+                if (tagRot && (!tag || tagRot < tag)) tag = tagRot;
 
                 next = pt ? pt : lStr;
                 if (lStr && (!next || lStr < next)) next = lStr;
                 if (ext && (!next || ext < next)) next = ext;
                 if (tag && (!next || tag < next)) next = tag;
+                if (dTxt && (!next || dTxt < next)) next = dTxt;
                 if (dim && (!next || dim < next)) next = dim;
                 if (pgDef && (!next || pgDef < next)) next = pgDef;
                 if (!next || next >= endBlock) break;
@@ -535,7 +579,7 @@ int LoadCFile(const char* path) {
 
                 memset(s, 0, sizeof(Shape));
                 s->useFill = 0; s->useStroke = 1; s->fill = RGB(128, 128, 128); s->stroke = RGB(0, 0, 0);
-                s->strokeWidth = 1; s->fontSize = 24;
+                s->strokeWidth = 1; s->fontSize = 24; s->rot = 0.0;
 
                 colorSearch = st;
                 while (colorSearch < next) {
@@ -585,6 +629,31 @@ int LoadCFile(const char* path) {
                         UnescapeCString(tagStr, s->tagData, 128);
                         tmpCount++;
                     }
+                } else if (next == dTxt) {
+                    char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                    if (pOpen) {
+                        char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+                        char* c3 = c2 ? strchr(c2 + 1, ',') : NULL; char* c4 = c3 ? strchr(c3 + 1, ',') : NULL;
+                        if (c4 && (!q1 || c4 < q1)) {
+                            s->type = 5; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = atof(c1 + 1);
+                            s->ptsX[1] = atof(c2 + 1); s->ptsY[1] = atof(c3 + 1); s->ptCount = 2;
+                            char* pClose = strrchr(next, ')');
+                            if (q1 && q2 && q1 < pClose) {
+                                int tLen = q2 - (q1 + 1); if (tLen > 127) tLen = 127;
+                                static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0';
+                                UnescapeCString(rawTag, s->text, 128);
+                                char* commaAfter = strchr(q2, ',');
+                                if (commaAfter && commaAfter < pClose) {
+                                    char jChar = 'L'; char* jPtr = commaAfter + 1;
+                                    while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                    if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
+                                    char* comma4_inner = strchr(commaAfter + 1, ',');
+                                    if (comma4_inner && comma4_inner < pClose) s->fontSize = atoi(comma4_inner + 1);
+                                } else s->useFill = 0;
+                            }
+                            tmpCount++;
+                        }
+                    }
                 } else if (next == tag) {
                     char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
                     if (pOpen) {
@@ -602,7 +671,11 @@ int LoadCFile(const char* path) {
                                     while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
                                     if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
                                     char* comma4 = strchr(commaAfter + 1, ',');
-                                    if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                    if (comma4 && comma4 < pClose) {
+                                        s->fontSize = atoi(comma4 + 1);
+                                        char* comma5 = strchr(comma4 + 1, ',');
+                                        if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                    }
                                 } else s->useFill = 0;
                             } else if (comma2) {
                                 char* comma3 = strchr(comma2 + 1, ','); char* endMarker = comma3 ? comma3 : pClose;
@@ -617,7 +690,11 @@ int LoadCFile(const char* path) {
                                         while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
                                         if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
                                         char* comma4 = strchr(comma3 + 1, ',');
-                                        if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                        if (comma4 && comma4 < pClose) {
+                                            s->fontSize = atoi(comma4 + 1);
+                                            char* comma5 = strchr(comma4 + 1, ',');
+                                            if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                        }
                                     } else s->useFill = 0;
                                 }
                             }
@@ -663,10 +740,6 @@ int LoadCFile(const char* path) {
     return parsedCount;
 }
 
-/* --- Direct PDF Disk Generation Engine --- */
-long pdf_objects[2048];
-int pdf_obj_cnt = 1;
-
 void pdf_out(FILE* f, long* stream_len, const char* fmt, ...) {
     char buf[1024];
     va_list args; int n;
@@ -696,7 +769,7 @@ void pdf_text_color(FILE* f, long* stream_len, long hex_color) {
 
 void CalcBoundingBox(Shape** shapes, int count, double* outMinX, double* outMinY, double* outMaxX, double* outMaxY) {
     int i, p; double minX = 99999.0, minY = 99999.0, maxX = -99999.0, maxY = -99999.0;
-    for (i=0; i<count; i++) {
+    for (i = 0; i < count; i++) {
         Shape* sh = shapes[i];
         if (sh->type == 3) {
             char refPath[260]; double rScale = 1.0; double rRot = 0.0; char *pScale, *pRot, *pEnd; int pathLen;
@@ -748,11 +821,15 @@ void CalcBoundingBox(Shape** shapes, int count, double* outMinX, double* outMinY
                     }
                 }
             }
-        } else if (sh->type == 4) {
+        } else if (sh->type == 4 || sh->type == 5) {
             minX = fmin(minX, sh->ptsX[0]); maxX = fmax(maxX, sh->ptsX[0]);
             minY = fmin(minY, sh->ptsY[0]); maxY = fmax(maxY, sh->ptsY[0]);
+            if (sh->type == 5 && sh->ptCount >= 2) {
+                minX = fmin(minX, sh->ptsX[1]); maxX = fmax(maxX, sh->ptsX[1]);
+                minY = fmin(minY, sh->ptsY[1]); maxY = fmax(maxY, sh->ptsY[1]);
+            }
         } else {
-            for (p=0; p<sh->ptCount; p++) {
+            for (p = 0; p < sh->ptCount; p++) {
                 minX = fmin(minX, sh->ptsX[p]); maxX = fmax(maxX, sh->ptsX[p]);
                 minY = fmin(minY, sh->ptsY[p]); maxY = fmax(maxY, sh->ptsY[p]);
             }
@@ -836,7 +913,7 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
                     continue;
                 }
 
-                if (sub->type == 4) {
+                if (sub->type == 4 || sub->type == 5) {
                     Shape* tShp = (Shape*)calloc(1, sizeof(Shape));
                     if (tShp) {
                         char tagBuf[128];
@@ -865,6 +942,15 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
                         }
 
                         *tShp = *sub; tShp->ptsX[0] = wx; tShp->ptsY[0] = wy; strcpy(tShp->text, tagBuf);
+                        tShp->rot = sub->rot + rRot;
+                        if (sub->type == 5 && sub->ptCount >= 2) {
+                            double dx1 = (sub->ptsX[1] - lcx) * rScale, dy1 = (sub->ptsY[1] - lcy) * rScale;
+                            double wx1 = objCx + dx1 * cosR - dy1 * sinR, wy1 = objCy + dx1 * sinR + dy1 * cosR;
+                            tShp->ptsX[1] = wx1; tShp->ptsY[1] = wy1;
+                            if (currentPt < MAX_POINTS) {
+                                sh->ptsX[currentPt] = wx1; sh->ptsY[currentPt] = wy1; currentPt++;
+                            }
+                        }
                         tShp->fontSize = sub->fontSize > 0 ? (int)(sub->fontSize * rScale) : (int)(24 * rScale);
                         tShp->strokeWidth = sub->strokeWidth > 0 ? (int)(sub->strokeWidth * rScale) : (int)(1 * rScale);
                         DrawPDFShape(f, len, tShp, pageScale, offX, offY, minX, minY, pt_h, iconPageScale);
@@ -901,8 +987,8 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
         return;
     }
     
-    if (sh->type == 4) {
-        char dispT[256]; double tx, ty; double pdfFSize, text_w, anchor_x;
+    if (sh->type == 4 || sh->type == 5) {
+        char dispT[256]; double tx, ty; double pdfFSize;
         if (sh->text[0] == '{' && sh->text[1] == '{') {
             strcpy(dispT, sh->text + 2); char *pEnd = strstr(dispT, "}}");
             if (pEnd) *pEnd = '\0';
@@ -920,12 +1006,48 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
         if (pdfFSize < 2.0) pdfFSize = 2.0;
         
         pdf_text_color(f, len, sh->stroke);
-        text_w = lstrlen(dispT) * pdfFSize * 0.5; 
-        anchor_x = tx;
-        if (sh->useFill == 1) anchor_x -= text_w / 2.0;
-        else if (sh->useFill == 2) anchor_x -= text_w;
         
-        pdf_out(f, len, "BT /F1 %.2f Tf %.2f %.2f Td (%s) Tj ET\n", pdfFSize, anchor_x, ty - pdfFSize, dispT);
+        double angle = 0.0;
+        if (sh->type == 5 && sh->ptCount >= 2) {
+            double tx1 = offX + (sh->ptsX[1] - minX) * pageScale;
+            double ty1 = pt_h - (offY + (sh->ptsY[1] - minY) * pageScale);
+            angle = atan2(ty1 - ty, tx1 - tx);
+        } else if (sh->type == 4) {
+            angle = sh->rot * PI / 180.0;
+        }
+        
+        double cosA = cos(angle);
+        double sinA = -sin(angle);
+        
+        char* line = dispT;
+        char* nextLine;
+        int lineNum = 0;
+        
+        while (line) {
+            nextLine = strchr(line, '\n');
+            if (nextLine) *nextLine = '\0';
+            
+            double text_w = lstrlen(line) * pdfFSize * 0.55; 
+            double cdx = 0;
+            if (sh->useFill == 1) cdx = -text_w / 2.0;
+            else if (sh->useFill == 2) cdx = -text_w;
+            
+            double cdy = lineNum * pdfFSize * 1.15;
+            
+            double c_rx = cdx * cosA - cdy * sinA;
+            double c_ry = -(cdx * sinA + cdy * cosA) - pdfFSize;
+            
+            double line_tx = tx + c_rx;
+            double line_ty = ty + c_ry;
+            
+            pdf_out(f, len, "BT /F1 %.2f Tf %.4f %.4f %.4f %.4f %.2f %.2f Tm (%s) Tj ET\n", 
+                pdfFSize, cosA, -sinA, sinA, cosA, line_tx, line_ty, line);
+            
+            if (nextLine) { *nextLine = '\n'; line = nextLine + 1; }
+            else line = NULL;
+            
+            lineNum++;
+        }
         return;
     }
 
@@ -938,7 +1060,7 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
     
     {
         int p;
-        for (p=0; p < sh->ptCount; p++) {
+        for (p = 0; p < sh->ptCount; p++) {
             double px = offX + (sh->ptsX[p] - minX) * pageScale;
             double py = pt_h - (offY + (sh->ptsY[p] - minY) * pageScale);
             if (p == 0) pdf_out(f, len, "%.2f %.2f m\n", px, py);
@@ -954,7 +1076,6 @@ void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, 
         if (sh->useStroke) pdf_out(f, len, "S\n");
     }
 }
-
 void DrawPDFDimensions(FILE* f, long* stream_len, Dimension* dims, int dimCount, Shape** shapes, int shapeCount, double pageScale, double offX, double offY, double minX, double minY, double pt_h, const char* unitName, double rScale, double cosR, double sinR, double objCx, double objCy, double lcx, double lcy) {
     int i;
     for (i = 0; i < dimCount; i++) {
@@ -1108,21 +1229,18 @@ int generate_pdf(const char* out_file, const char* in_file, float margH_pct, flo
     pdf_objects[font2_obj] = ftell(f);
     fprintf(f, "%d 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n", font2_obj);
 
-    for (i=0; i<parsedCount; i++) {
+    for (i = 0; i < parsedCount; i++) {
         double minX, minY, maxX, maxY, scaleX, scaleY, scale, offX, offY; float gw, gh; int j;
         int page_obj, stream_obj, len_obj;
         long stream_len = 0;
         int gridW, gridH;
-        double drawW, drawH;
         
-        /* Default to Landscape Letter if not explicitly found */
         float page_w = 279.4f, page_h = 215.9f;
         float pt_w, pt_h, m_x, m_y;
         char* paren;
         
         if (!parsedIcons[i]->shapes || parsedIcons[i]->shapeCount <= 0) continue;
         
-        /* Parse Width x Height dynamically from the PAGE_DEF name string (e.g., "Letter (279.4x215.9)") */
         paren = strchr(parsedIcons[i]->pageName, '(');
         if (paren) {
             float tw = 0.0f, th = 0.0f;
@@ -1138,29 +1256,21 @@ int generate_pdf(const char* out_file, const char* in_file, float margH_pct, flo
         m_y = pt_h * (margV_pct / 100.0f);
         
         CalcBoundingBox(parsedIcons[i]->shapes, parsedIcons[i]->shapeCount, &minX, &minY, &maxX, &maxY);
-        
-        drawW = maxX - minX;
-        drawH = maxY - minY;
-        if (drawW < 1.0) drawW = 1.0;
-        if (drawH < 1.0) drawH = 1.0;
 
-        if (parsedIcons[i]->gridW > 0 && parsedIcons[i]->gridH > 0) {
-            gridW = parsedIcons[i]->gridW;
-            gridH = parsedIcons[i]->gridH;
-        } else {
-            gridW = (int)(drawW + 2.5);
-            gridH = (int)(drawH + 2.5);
-            if (gridW < 32) gridW = 32;
-            if (gridH < 32) gridH = 32;
-        }
+        gridW = parsedIcons[i]->gridW > 0 ? parsedIcons[i]->gridW : 32;
+        gridH = parsedIcons[i]->gridH > 0 ? parsedIcons[i]->gridH : 32;
 
-        gw = pt_w - m_x*2; gh = pt_h - m_y*2;
+        gw = pt_w - m_x * 2.0f; 
+        gh = pt_h - m_y * 2.0f;
         scaleX = gw / (double)gridW; 
         scaleY = gh / (double)gridH;
         scale = fmin(scaleX, scaleY);
         
-        offX = m_x + (gw - drawW*scale) / 2.0;
-        offY = m_y + (gh - drawH*scale) / 2.0;
+        offX = m_x + (gw - gridW * scale) / 2.0;
+        offY = m_y + (gh - gridH * scale) / 2.0;
+
+        minX = 0.0;
+        minY = 0.0;
 
         page_obj = pdf_obj_cnt++; stream_obj = pdf_obj_cnt++; len_obj = pdf_obj_cnt++;
         page_list[page_cnt++] = page_obj;
@@ -1173,7 +1283,7 @@ int generate_pdf(const char* out_file, const char* in_file, float margH_pct, flo
         fprintf(f, "%d 0 obj\n<< /Length %d 0 R >>\nstream\n", stream_obj, len_obj);
         
         g_RenderRefDepth = 0;
-        for (j=0; j<parsedIcons[i]->shapeCount; j++) {
+        for (j = 0; j < parsedIcons[i]->shapeCount; j++) {
             DrawPDFShape(f, &stream_len, parsedIcons[i]->shapes[j], scale, offX, offY, minX, minY, pt_h, parsedIcons[i]->pageScale);
         }
         

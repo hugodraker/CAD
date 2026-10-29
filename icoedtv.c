@@ -1,14 +1,17 @@
 /* ============================================================================
- * Vector Icon Editor for Win32 - Saves icons as GDI Polygons
+ * Vector Editor for Win32 - Saves icons as GDI Polygons
  * ============================================================================
- * PORTED TO WIN32 GCC (MinGW)
- * gcc -Os -s -std=c99 -mwindows icoedtv.c -o icoedtv.exe -lcomdlg32 -lshell32
+ * GCC WIN32 C PORT
+ * gcc -O2 -mwindows icoedtv.c -o icoedtv.exe -lcomdlg32
  *
- * PUBLIC DOMAIN NOTICE
- * Free and unencumbered software released into the public domain.
+ *  2026 HUGO
+ *
+ * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
+ * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  * ============================================================================ */
 
 #include <windows.h>
+#include <windowsx.h>
 #include <commdlg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,33 +21,12 @@
 #include <direct.h>
 #include <shellapi.h>
 #include <stdarg.h>
-
-#ifndef GWLP_WNDPROC
-#define GWLP_WNDPROC -4
-#define SetWindowLongPtr SetWindowLong
-#endif
-
-void WriteLog(const char* fmt, ...) {
-    return;
-    FILE* f = fopen("debug.log", "a");
-    if (f) {
-        va_list args;
-        va_start(args, fmt);
-        vfprintf(f, fmt, args);
-        va_end(args);
-        fprintf(f, "\n");
-        fclose(f);
-    }
-}
-
 #ifndef PI
 #define PI 3.14159265358979323846
 #endif
-
 #ifndef WM_APP
 #define WM_APP 0x8000
 #endif
-
 #define GRID_SIZE 32
 #define MAX_POINTS 64
 #define MAX_SHAPES 40
@@ -55,12 +37,10 @@ void WriteLog(const char* fmt, ...) {
 #define MAX_DIMS 32
 #define MAX_REFS 10
 #define MAX_EDIT_TAGS 64
-
 /* C89 Math & Color Macros */
 #define fmax(a,b) (((a)>(b))?(a):(b))
 #define fmin(a,b) (((a)<(b))?(a):(b))
 #define round(x) ((double)((long)((x) + ((x)>=0 ? 0.5 : -0.5))))
-
 typedef struct { 
     int type; 
     double ptsX[MAX_POINTS]; 
@@ -71,9 +51,10 @@ typedef struct {
     int useFill; 
     int useStroke;
     int strokeWidth;
-    int fontSize;   
+    int fontSize;
     char text[128]; 
     char tagData[128]; 
+    double rot; 
 } Shape;
 
 typedef struct {
@@ -211,8 +192,6 @@ void SwitchToIcon(int idx);
 void InitFont(void);
 void GenShape(double eX, double eY);
 int PointInPolyShape(double px, double py, Shape* s);
-void LoadCFile(const char* path, HWND hwnd);
-void ShowRefListDialog(const char* filePath, HWND hwnd);
 
 int shapeCount = 0;
 int historyShapeCount[MAX_UNDO]; 
@@ -229,7 +208,7 @@ int selOrderS[MAX_POINTS], selOrderP[MAX_POINTS], selOrderCount = 0;
 int startX = 0, startY = 0;
 double currentEndX = 0, currentEndY = 0;
 int snapToGrid = 1;
-int currentStrokeWidth = 1;
+int currentStrokeWidth = 1; 
 
 char tagNames[MAX_TAGS][32];
 char tagValues[MAX_TAGS][128];
@@ -238,7 +217,7 @@ int tagCount = 0;
 HWND hPageSizeDlg = NULL;
 HWND hEditW = NULL, hEditH = NULL;
 HWND hMultiEdit = NULL;
-FARPROC oldMultiEditProc = NULL;
+WNDPROC oldMultiEditProc = NULL;
 
 int editShapeIdx = -1;
 int editTagIdx = -1;
@@ -246,7 +225,8 @@ int gridW = 32, gridH = 32;
 int canvasW_px = 320, canvasH_px = 320;
 double extScale = 1.0;
 
-double textCursorX = 0, textCursorY = 0; int textCursorActive = 0;
+double textCursorX = 0, textCursorY = 0; 
+int textCursorActive = 0;
 long font5x3[128] = {0};
 
 COLORREF palette[16] = {
@@ -255,17 +235,19 @@ COLORREF palette[16] = {
     RGB(0,255,0), RGB(0,128,0), RGB(0,255,255), RGB(0,128,128),
     RGB(0,0,255), RGB(0,0,128), RGB(255,0,255), RGB(128,0,128)
 };
-COLORREF currentFill = RGB(128, 128, 128); int useFill = 1;
-COLORREF currentStroke = RGB(0, 0, 0); int useStroke = 1;
+COLORREF currentFill = RGB(128, 128, 128); 
+int useFill = 1;
+COLORREF currentStroke = RGB(0, 0, 0); 
+int useStroke = 1;
 
 HINSTANCE hInst = NULL;
 HWND hMain, hStatus;
-HWND hBtn[36]; /* UPDATED FOR 36 BUTTONS */
-HWND hBtnThickPlus, hBtnThickMinus;
+HWND hBtn[36];
+HWND hBtnThickPlus, hBtnThickMinus; 
 HWND hScrlSides, hScrlDepth, hScrlIcon;
 HWND hBtnAddIcon, hBtnDelIcon;
 HWND hDistEdit = NULL; 
-FARPROC oldEditProc = NULL;
+WNDPROC oldEditProc = NULL;
 int distEditMode = 0;
 
 int paramSides = 4, paramStar = 100;
@@ -279,8 +261,9 @@ const char* const bT[36] = {
     "Align Vert", "Align Horz", "Set Dist", "Set Width", "Set Height", 
     "Duplicate", "Set Angle", "Dimension", "Page Size", "Tag Editor", 
     "Add Tag", "(Lock Axis)", "Show All",
-    "ToRef", "FromRef", "Stub"
+    "ToRef", "FromRef", "Text"
 };
+
 int lockAxis = 0;
 
 HWND hScrlZoom;
@@ -291,13 +274,29 @@ int panStartX = 0, panStartY = 0;
 
 char pendingSvgFile[260] = "";
 
+void LoadCFile(const char* path, HWND hwnd);
+void ShowRefListDialog(const char* filePath, HWND hwnd);
+
+void WriteLog(const char* fmt, ...) {
+return;
+    FILE* f = fopen("debug.log", "a");
+    if (f) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(f, fmt, args);
+        va_end(args);
+        fprintf(f, "\n");
+        fclose(f);
+    }
+}
+
+#ifndef PI
 /* --- Utilities & Initialization --- */
 double CLAMP(double v, double minv, double maxv) {
     if (v < minv) return minv;
     if (v > maxv) return maxv;
     return v;
 }
-
 void DoSaveRef(HWND hwnd) {
     static OPENFILENAME ofn; static char szFile[260]; FILE* f; int j; 
     
@@ -321,7 +320,7 @@ void DoSaveRef(HWND hwnd) {
             fprintf(f, "case 1: {\n");
             if (iconShapes) {
                 for (j = 0; j < iconShapeCount; j++) {
-                    if (iconShapes[j].type == 3) continue;
+                    if (iconShapes[j].type == 3) continue; 
                     WriteShapeToC(f, &iconShapes[j], j);
                 }
             }
@@ -330,7 +329,6 @@ void DoSaveRef(HWND hwnd) {
         }
     }
 }
-
 void EscapeCString(const char* in, char* out, int maxLen) {
     int len = 0;
     if (!in || !out) return;
@@ -357,7 +355,7 @@ int EnsureRefLoaded(const char* path) {
     if (refCacheCount >= MAX_REFS) return -1;
 
     if (!refCache[refCacheCount].shapes) {
-        refCache[refCacheCount].shapes = (Shape*)calloc(1, MAX_SHAPES * sizeof(Shape));
+        refCache[refCacheCount].shapes = (Shape*)calloc(MAX_SHAPES, sizeof(Shape));
         if (!refCache[refCacheCount].shapes) return -1;
     }
 
@@ -391,7 +389,6 @@ int EnsureRefLoaded(const char* path) {
 
     return refCacheCount++;
 }
-
 void EscapeNewlines(const char* in, char* out) {
     int outLen = 0;
     if (!in || !out) return;
@@ -402,7 +399,6 @@ void EscapeNewlines(const char* in, char* out) {
     }
     *out = '\0';
 }
-
 void FormatDimension(double val, const char* unit, char* outBuf) {
     if (_stricmp(unit, "feet-inches") == 0) {
         int feet = (int)(val / 12.0);
@@ -425,7 +421,6 @@ void FormatDimension(double val, const char* unit, char* outBuf) {
         else sprintf(outBuf, "%.2f %s", val, unit);
     }
 }
-
 char* FindQuote(char* start) {
     char* p = start;
     while (*p) {
@@ -435,7 +430,6 @@ char* FindQuote(char* start) {
     }
     return NULL;
 }
-
 void GetResolveBase(char* base) {
     if (loadedCFile[0]) {
         strcpy(base, loadedCFile);
@@ -444,7 +438,6 @@ void GetResolveBase(char* base) {
         else strcpy(base, "");
     }
 }
-
 void GetPipeValue(const char* pipeStr, int idx, char* out, int maxLen) {
     int curr = 0;
     const char* start = pipeStr;
@@ -466,7 +459,6 @@ void GetPipeValue(const char* pipeStr, int idx, char* out, int maxLen) {
         out[len] = '\0';
     }
 }
-
 void GetRelativePath(const char* base, const char* target, char* out) {
     int i = 0, j = 0, bCount = 0, tCount = 0;
     static char bDirs[20][64]; static char tDirs[20][64];
@@ -507,7 +499,6 @@ void GetRelativePath(const char* base, const char* target, char* out) {
         if (j < tCount - 1) strcat(out, "\\");
     }
 }
-
 int IsRefFile(const char* path) {
     int i;
     for (i = 0; i < refCacheCount; i++) {
@@ -515,25 +506,30 @@ int IsRefFile(const char* path) {
     }
     return 0;
 }
-
 LRESULT CALLBACK MultiEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_KEYDOWN && wParam == VK_ESCAPE) { ShowWindow(hwnd, SW_HIDE); SetFocus(hMain); return 0; }
     if (msg == WM_KILLFOCUS) {
-        char buf[512], unesc[512]; 
+        char buf[512], unesc[512], clean[512]; 
+        int i = 0, j = 0;
         GetWindowText(hwnd, buf, 512);
         UnescapeCString(buf, unesc, 512);
+        while (unesc[i]) {
+            if (unesc[i] == '\r') { i++; continue; }
+            clean[j++] = unesc[i++];
+        }
+        clean[j] = '\0';
         if (editShapeIdx != -1) {
             SaveState();
             if (editTagIdx == -1) {
-                strncpy(shapes[editShapeIdx].text, unesc, 127);
+                strncpy(shapes[editShapeIdx].text, clean, 127);
                 shapes[editShapeIdx].text[127] = '\0';
             } else {
-                SetPipeValue(shapes[editShapeIdx].tagData, editTagIdx, unesc);
+                SetPipeValue(shapes[editShapeIdx].tagData, editTagIdx, clean);
             }
         }
         ShowWindow(hwnd, SW_HIDE); editShapeIdx = -1; RedrawCanvas(hMain);
     }
-    return CallWindowProc((WNDPROC)oldMultiEditProc, hwnd, msg, wParam, lParam);
+    return CallWindowProc(oldMultiEditProc, hwnd, msg, wParam, lParam);
 }
 
 void ProcessDropFile(const char* filePath, HWND hwnd) {
@@ -562,7 +558,6 @@ void ProcessDropFile(const char* filePath, HWND hwnd) {
         }
     }
 }
-
 LRESULT CALLBACK PageSizeProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     static HWND hComboPage = NULL, hComboUnits = NULL, hComboScale = NULL, hComboOrient = NULL;
     static HWND hEditTitle = NULL;
@@ -827,7 +822,218 @@ LRESULT CALLBACK PageSizeProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
     return 0;
 }
+void DrawPDFShape(FILE* f, long* len, Shape* sh, double pageScale, double offX, double offY, double minX, double minY, double pt_h, double iconPageScale) {
+    if (sh->type == 3) {
+        char refPath[260]; double rScale = 1.0, rRot = 0.0;
+        char *pScale, *pRot, *pEnd; int pathLen;
+        if (strncmp(sh->text, "{{EXT_REF=", 10) != 0) return;
+        pScale = strstr(sh->text, " scale="); pRot = strstr(sh->text, " rot="); pEnd = strstr(sh->text, "}}");
+        if (pScale) pathLen = (int)(pScale - (sh->text + 10));
+        else if (pEnd) pathLen = (int)(pEnd - (sh->text + 10));
+        else pathLen = strlen(sh->text + 10);
+        
+        if (pathLen <= 0 || pathLen >= 260) return;
+        strncpy(refPath, sh->text + 10, pathLen); refPath[pathLen] = '\0';
+        while (pathLen > 0 && isspace((unsigned char)refPath[pathLen - 1])) refPath[--pathLen] = '\0';
+        if (pScale) sscanf(pScale, " scale=%lf", &rScale);
+        if (pRot) sscanf(pRot, " rot=%lf", &rRot);
+        
+        char absPath[260]; int rIdx;
+        ResolvePath(loadedCFile, refPath, absPath);
+        if (loadedCFile[0] && _stricmp(absPath, loadedCFile) == 0) return; 
+        rIdx = EnsureRefLoaded(absPath);
+        if (rIdx != -1) {
+            double lcx = (refCache[rIdx]->minX + refCache[rIdx]->maxX) / 2.0;
+            double lcy = (refCache[rIdx]->minY + refCache[rIdx]->maxY) / 2.0;
+            double objCx = sh->ptsX[0] + lcx * rScale;
+            double objCy = sh->ptsY[0] + lcy * rScale;
+            double rRad = rRot * PI / 180.0, cosR = cos(rRad), sinR = sin(rRad);
+            int refTagIdx = 0, r;
+            int currentPt = 6;
 
+            for (r = 0; r < refCache[rIdx]->shapeCount; r++) {
+                Shape* sub = refCache[rIdx]->shapes[r];
+                
+                if (sub->type == 3) {
+                    if (g_RenderRefDepth < 3 && strncmp(sub->text, "{{EXT_REF=", 10) == 0) {
+                        Shape* tempRef = (Shape*)calloc(1, sizeof(Shape));
+                        if (tempRef) {
+                            char subPath[260]; double subSc = 1.0, subRot = 0.0;
+                            char *spS = strstr(sub->text, " scale="), *spR = strstr(sub->text, " rot="), *spE = strstr(sub->text, "}}");
+                            int sLen, ptIdx;
+                            
+                            *tempRef = *sub;
+                            if (spS) sLen = (int)(spS - (sub->text + 10)); else if (spE) sLen = (int)(spE - (sub->text + 10)); else sLen = strlen(sub->text + 10);
+                            if (sLen > 0 && sLen < 260) {
+                                strncpy(subPath, sub->text + 10, sLen); subPath[sLen] = '\0';
+                                while (sLen > 0 && isspace((unsigned char)subPath[sLen - 1])) subPath[--sLen] = '\0';
+                                if (spS) sscanf(spS, " scale=%lf", &subSc);
+                                if (spR) sscanf(spR, " rot=%lf", &subRot);
+                                
+                                double dx = (sub->ptsX[0] - lcx) * rScale;
+                                double dy = (sub->ptsY[0] - lcy) * rScale;
+                                tempRef->ptsX[0] = objCx + dx * cosR - dy * sinR;
+                                tempRef->ptsY[0] = objCy + dx * sinR + dy * cosR;
+                                sprintf(tempRef->text, "{{EXT_REF=%s scale=%.2f rot=%.2f}}", subPath, subSc * rScale, subRot + rRot);
+                                
+                                g_RenderRefDepth++;
+                                DrawPDFShape(f, len, tempRef, pageScale, offX, offY, minX, minY, pt_h, iconPageScale);
+                                g_RenderRefDepth--;
+                                
+                                for (ptIdx = 0; ptIdx < tempRef->ptCount; ptIdx++) {
+                                    if (currentPt < MAX_POINTS) {
+                                        sh->ptsX[currentPt] = tempRef->ptsX[ptIdx];
+                                        sh->ptsY[currentPt] = tempRef->ptsY[ptIdx];
+                                        currentPt++;
+                                    }
+                                }
+                            }
+                            free(tempRef);
+                        }
+                    }
+                    continue;
+                }
+
+                if (sub->type == 4 || sub->type == 5) {
+                    Shape* tShp = (Shape*)calloc(1, sizeof(Shape));
+                    if (tShp) {
+                        char tagBuf[128];
+                        double dx = (sub->ptsX[0] - lcx) * rScale, dy = (sub->ptsY[0] - lcy) * rScale;
+                        double wx = objCx + dx * cosR - dy * sinR, wy = objCy + dx * sinR + dy * cosR;
+                        char instVal[128]; GetPipeValue(sh->tagData, refTagIdx, instVal, 128);
+                        
+                        if (strlen(instVal) > 0) { strncpy(tagBuf, instVal, 127); tagBuf[127] = '\0'; } 
+                        else { strncpy(tagBuf, sub->text, 127); tagBuf[127] = '\0'; }
+                        
+                        if (tagBuf[0] == '{' && tagBuf[1] == '{') {
+                            char tempBuf[128];
+                            strcpy(tempBuf, tagBuf + 2);
+                            char *pEndClean = strstr(tempBuf, "}}");
+                            if (pEndClean) *pEndClean = '\0';
+                            strcpy(tagBuf, tempBuf);
+                        }
+                        
+                        if (strcmp(tagBuf, "SHEETSCALE") == 0) {
+                            if (iconPageScale > 0 && iconPageScale <= 1.0) sprintf(tagBuf, "1:%g", 1.0 / iconPageScale);
+                            else sprintf(tagBuf, "%g", iconPageScale);
+                        }
+
+                        if (currentPt < MAX_POINTS) {
+                            sh->ptsX[currentPt] = wx; sh->ptsY[currentPt] = wy; currentPt++;
+                        }
+
+                        *tShp = *sub; tShp->ptsX[0] = wx; tShp->ptsY[0] = wy; strcpy(tShp->text, tagBuf);
+                        tShp->rot = sub->rot + rRot;
+                        if (sub->type == 5 && sub->ptCount >= 2) {
+                            double dx1 = (sub->ptsX[1] - lcx) * rScale, dy1 = (sub->ptsY[1] - lcy) * rScale;
+                            double wx1 = objCx + dx1 * cosR - dy1 * sinR, wy1 = objCy + dx1 * sinR + dy1 * cosR;
+                            tShp->ptsX[1] = wx1; tShp->ptsY[1] = wy1;
+                            if (currentPt < MAX_POINTS) {
+                                sh->ptsX[currentPt] = wx1; sh->ptsY[currentPt] = wy1; currentPt++;
+                            }
+                        }
+                        tShp->fontSize = sub->fontSize > 0 ? (int)(sub->fontSize * rScale) : (int)(24 * rScale);
+                        tShp->strokeWidth = sub->strokeWidth > 0 ? (int)(sub->strokeWidth * rScale) : (int)(1 * rScale);
+                        DrawPDFShape(f, len, tShp, pageScale, offX, offY, minX, minY, pt_h, iconPageScale);
+                        free(tShp);
+                    }
+                    refTagIdx++;
+                } else {
+                    Shape* tmpShp = (Shape*)calloc(1, sizeof(Shape));
+                    if (tmpShp) {
+                        int pIdx;
+                        *tmpShp = *sub;
+                        for (pIdx = 0; pIdx < sub->ptCount; pIdx++) {
+                            double dx = (sub->ptsX[pIdx] - lcx) * rScale, dy = (sub->ptsY[pIdx] - lcy) * rScale;
+                            double wx = objCx + dx * cosR - dy * sinR;
+                            double wy = objCy + dx * sinR + dy * cosR;
+                            tmpShp->ptsX[pIdx] = wx; tmpShp->ptsY[pIdx] = wy;
+                            if (currentPt < MAX_POINTS) {
+                                sh->ptsX[currentPt] = wx; sh->ptsY[currentPt] = wy; currentPt++;
+                            }
+                        }
+                        tmpShp->strokeWidth = sub->strokeWidth > 0 ? (int)(sub->strokeWidth * rScale) : (int)(1 * rScale);
+                        DrawPDFShape(f, len, tmpShp, pageScale, offX, offY, minX, minY, pt_h, iconPageScale);
+                        free(tmpShp);
+                    }
+                }
+            }
+            
+            if (refCache[rIdx]->dimCount > 0) {
+                DrawPDFDimensions(f, len, refCache[rIdx]->dims, refCache[rIdx]->dimCount, refCache[rIdx]->shapes, refCache[rIdx]->shapeCount, pageScale, offX, offY, minX, minY, pt_h, refCache[rIdx]->unitName, rScale, cosR, sinR, objCx, objCy, lcx, lcy);
+            }
+            
+            sh->ptCount = currentPt;
+        }
+        return;
+    }
+    
+    if (sh->type == 4 || sh->type == 5) {
+        char dispT[256]; double tx, ty; double pdfFSize, text_w, x_off;
+        if (sh->text[0] == '{' && sh->text[1] == '{') {
+            strcpy(dispT, sh->text + 2); char *pEnd = strstr(dispT, "}}");
+            if (pEnd) *pEnd = '\0';
+        } else { strcpy(dispT, sh->text); }
+        sanitize_pdf_string(dispT);
+
+        if (strcmp(dispT, "SHEETSCALE") == 0) {
+            if (iconPageScale > 0 && iconPageScale <= 1.0) sprintf(dispT, "1:%g", 1.0 / iconPageScale);
+            else sprintf(dispT, "%g", iconPageScale);
+        }
+
+        tx = offX + (sh->ptsX[0] - minX) * pageScale;
+        ty = pt_h - (offY + (sh->ptsY[0] - minY) * pageScale);
+        pdfFSize = (double)((sh->fontSize > 0 ? sh->fontSize : 24) / 10.0 * pageScale);
+        if (pdfFSize < 2.0) pdfFSize = 2.0;
+        
+        pdf_text_color(f, len, sh->stroke);
+        text_w = lstrlen(dispT) * pdfFSize * 0.5; 
+        
+        x_off = 0;
+        if (sh->useFill == 1) x_off = -text_w / 2.0;
+        else if (sh->useFill == 2) x_off = -text_w;
+        
+        double angle = 0.0;
+        if (sh->type == 5 && sh->ptCount >= 2) {
+            double tx1 = offX + (sh->ptsX[1] - minX) * pageScale;
+            double ty1 = pt_h - (offY + (sh->ptsY[1] - minY) * pageScale);
+            angle = atan2(ty1 - ty, tx1 - tx);
+        } else if (sh->type == 4) {
+            angle = sh->rot * PI / 180.0;
+        }
+        double cosA = cos(angle);
+        double sinA = sin(angle);
+        
+        pdf_out(f, len, "BT /F1 %.2f Tf %.4f %.4f %.4f %.4f %.2f %.2f Tm %.2f %.2f Td (%s) Tj ET\n", 
+            pdfFSize, cosA, sinA, -sinA, cosA, tx, ty, x_off, -pdfFSize, dispT);
+        return;
+    }
+
+    pdf_color(f, len, 0, sh->fill);
+    pdf_color(f, len, 1, sh->stroke);
+    
+    double sw = (sh->strokeWidth > 0 ? sh->strokeWidth : 1.0) / 10.0 * pageScale;
+    pdf_out(f, len, "2 J\n"); 
+    pdf_out(f, len, "%.2f w\n", sw);
+    
+    {
+        int p;
+        for (p=0; p < sh->ptCount; p++) {
+            double px = offX + (sh->ptsX[p] - minX) * pageScale;
+            double py = pt_h - (offY + (sh->ptsY[p] - minY) * pageScale);
+            if (p == 0) pdf_out(f, len, "%.2f %.2f m\n", px, py);
+            else pdf_out(f, len, "%.2f %.2f l\n", px, py);
+        }
+    }
+
+    if (sh->type == 0) {
+        if (sh->useFill && sh->useStroke) pdf_out(f, len, "B\n");
+        else if (sh->useFill) pdf_out(f, len, "f\n");
+        else if (sh->useStroke) pdf_out(f, len, "S\n");
+    } else {
+        if (sh->useStroke) pdf_out(f, len, "S\n");
+    }
+}
 LRESULT CALLBACK RefListProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     static HWND hList = NULL;
     switch(msg) {
@@ -840,7 +1046,7 @@ LRESULT CALLBACK RefListProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             if (f) {
                 fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
                 if (sz > 0 && sz <= 60000L) {
-                    char* d = (char*)calloc(1, sz + 1);
+                    char* d = (char*)calloc(sz + 1, 1);
                     if (d) {
                         fread(d, 1, (size_t)sz, f); d[sz] = '\0';
                         char* cur = d; int idx = 0;
@@ -953,17 +1159,17 @@ void ResolvePath(const char* base, const char* rel, char* out) {
     }
     strncat(out, p, 259 - strlen(out));
 }
-
 void ShowRefListDialog(const char* filePath, HWND hwnd) {
     strcpy(pendingRefFile, filePath);
     CreateWindow("RefListClass", "Select Reference Icon", 
                  WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_VISIBLE,
                  100, 100, 400, 300, hwnd, NULL, hInst, NULL);
 }
-
 void SetPipeValue(char* tagData, int idx, const char* newVal) {
     static char segs[16][128];
     int count = 0, i; char* p = tagData; char* start = tagData;
+    
+    if (idx < 0 || idx >= 16) return; /* Prevent optimizer warnings about out-of-bounds paths */
     
     memset(segs, 0, sizeof(segs));
     if (strlen(tagData) > 0) {
@@ -982,8 +1188,11 @@ void SetPipeValue(char* tagData, int idx, const char* newVal) {
             count++;
         }
     }
+    
     if (idx >= count) count = idx + 1;
-    if (idx < 16) { strncpy(segs[idx], newVal, 127); segs[idx][127] = '\0'; }
+    
+    strncpy(segs[idx], newVal, 127); 
+    segs[idx][127] = '\0';
     
     tagData[0] = '\0';
     for (i = 0; i < count; i++) {
@@ -991,11 +1200,11 @@ void SetPipeValue(char* tagData, int idx, const char* newVal) {
         strncat(tagData, segs[i], 127);
     }
 }
-
 void SilentLoadC(const char* path, RefCache* ref) {
     FILE* f; long sz; char *d, *cur;
-    ref->shapeCount = 0;
-
+    ref->shapeCount = 0; ref->dimCount = 0;
+    strcpy(ref->unitName, "mm");
+    
     f = fopen(path, "rb"); if (!f) return;
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
     if (sz <= 0 || sz > 60000L) { fclose(f); return; }
@@ -1012,105 +1221,101 @@ void SilentLoadC(const char* path, RefCache* ref) {
         while (st < endBlock && ref->shapeCount < MAX_SHAPES) {
             char *pt = strstr(st, "POINT "), *lStr = strstr(st, "L(");
             char *ext = strstr(st, "EXT_REF("); 
-            char *tag = strstr(st, "TAG_TEXT("), *dim = strstr(st, "DIMENSION(");
-            char *next = pt ? pt : lStr;
-            Shape* s = &ref->shapes[ref->shapeCount];
+            char *tag = strstr(st, "TAG_TEXT(");
+            char *tagRot = strstr(st, "TAG_TEXT_ROT(");
+            char *dim = strstr(st, "DIMENSION(");
+            char *pgDef = strstr(st, "PAGE_DEF(");
+            char *dTxt = strstr(st, "DRAW_TEXT(");
+            char *colorSearch, *next = pt ? pt : lStr;
+            Shape* s;
+
+            if (tagRot && (!tag || tagRot < tag)) tag = tagRot;
 
             if (lStr && (!next || lStr < next)) next = lStr;
             if (ext && (!next || ext < next)) next = ext; 
             if (tag && (!next || tag < next)) next = tag;
+            if (dTxt && (!next || dTxt < next)) next = dTxt;
             if (dim && (!next || dim < next)) next = dim;
+            if (pgDef && (!next || pgDef < next)) next = pgDef;
             if (!next || next >= endBlock) break;
 
-            if (next == dim) { 
+            if (next == pgDef) {
                 char* pOpen = strchr(next, '(');
-                if (pOpen) {
-                    char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
-                    char* c3 = c2 ? strchr(c2 + 1, ',') : NULL; char* c4 = c3 ? strchr(c3 + 1, ',') : NULL;
-                    char* c5 = c4 ? strchr(c4 + 1, ',') : NULL; char* c6 = c5 ? strchr(c5 + 1, ',') : NULL;
-                    if (c1 && c2 && c3 && c4 && c5 && c6 && ref->dimCount < MAX_DIMS) {
-                        int vS1 = atoi(pOpen + 1); int vP1 = atoi(c1 + 1);
-                        int vS2 = atoi(c2 + 1); int vP2 = atoi(c3 + 1);
-                        double vOff = atof(c4 + 1); double vTPos = atof(c5 + 1); int vMd = atoi(c6 + 1);
-                        
-                        ref->dims[ref->dimCount].s1 = vS1; ref->dims[ref->dimCount].p1 = vP1;
-                        ref->dims[ref->dimCount].s2 = vS2; ref->dims[ref->dimCount].p2 = vP2;
-                        ref->dims[ref->dimCount].offset = vOff; ref->dims[ref->dimCount].textPos = vTPos;
-                        ref->dims[ref->dimCount].mode = vMd; ref->dimCount++;
+                char* q1 = pOpen ? FindQuote(pOpen) : NULL;
+                char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                char* comma1 = q2 ? strchr(q2 + 1, ',') : NULL;
+                char* comma2 = comma1 ? strchr(comma1 + 1, ',') : NULL;
+                char* q3 = comma2 ? FindQuote(comma2 + 1) : NULL;
+                char* q4 = q3 ? FindQuote(q3 + 1) : NULL;
+                char* q5 = q4 ? FindQuote(q4 + 1) : NULL;
+                char* q6 = q5 ? FindQuote(q5 + 1) : NULL;
+                
+                if (q5 && q6) {
+                    int l2 = q6 - (q5 + 1); if (l2 > 31) l2 = 31;
+                    strncpy(ref->unitName, q5 + 1, l2); ref->unitName[l2] = '\0';
+                }
+                st = strchr(next, ';'); if (!st) st = next + 1; continue;
+            }
+
+            if (next == dim) { 
+                int s1, p1, s2, p2, md; double off, tp;
+                if (sscanf(next, "DIMENSION(%d , %d , %d , %d , %lf , %lf , %d)", &s1, &p1, &s2, &p2, &off, &tp, &md) == 7) {
+                    if (ref->dimCount < MAX_DIMS) {
+                        ref->dims[ref->dimCount].s1 = s1; ref->dims[ref->dimCount].p1 = p1;
+                        ref->dims[ref->dimCount].s2 = s2; ref->dims[ref->dimCount].p2 = p2;
+                        ref->dims[ref->dimCount].offset = off; ref->dims[ref->dimCount].textPos = tp;
+                        ref->dims[ref->dimCount].mode = md; ref->dimCount++;
                     }
                 }
                 st = strchr(next, ';'); if (!st) st = next + 1; continue; 
             }
 
-            memset(s, 0, sizeof(Shape));
-            s->useFill = 1; s->useStroke = 1; s->fill = RGB(128, 128, 128); s->stroke = RGB(0, 0, 0); s->strokeWidth = 1; s->fontSize = 24;
+            if (!ref->shapes[ref->shapeCount]) {
+                ref->shapes[ref->shapeCount] = (Shape*)calloc(1, sizeof(Shape));
+                if (!ref->shapes[ref->shapeCount]) break;
+            }
+            s = ref->shapes[ref->shapeCount];
 
-            {
-                char savedChar = *next; *next = '\0';
-                char* brushSearch = strstr(st, "CreateSolidBrush(RGB(");
-                if (brushSearch) {
-                    char* rgb = strstr(brushSearch, "RGB(");
-                    if (rgb) {
-                        int cr = atoi(rgb + 4); char* comma1 = strchr(rgb + 4, ',');
-                        if (comma1) {
-                            int cg = atoi(comma1 + 1); char* comma2 = strchr(comma1 + 1, ',');
-                            if (comma2) { int cb = atoi(comma2 + 1); s->fill = RGB(cr, cg, cb); s->useFill = 1; }
-                        }
-                    }
-                }
-                char* penSearch = strstr(st, "CreatePen(PS_SOLID, ");
-                if (penSearch) {
-                    int sw = atoi(penSearch + 20); char* rgb = strstr(penSearch, "RGB(");
-                    if (rgb) {
-                        int cr = atoi(rgb + 4); char* comma1 = strchr(rgb + 4, ',');
-                        if (comma1) {
-                            int cg = atoi(comma1 + 1); char* comma2 = strchr(comma1 + 1, ',');
-                            if (comma2) { int cb = atoi(comma2 + 1); s->stroke = RGB(cr, cg, cb); s->useStroke = 1; s->strokeWidth = sw > 0 ? sw : 1; }
-                        }
-                    }
-                }
-                *next = savedChar;
+            memset(s, 0, sizeof(Shape));
+            s->useFill = 0; s->useStroke = 1; s->fill = RGB(128, 128, 128); s->stroke = RGB(0, 0, 0);
+            s->strokeWidth = 1; s->fontSize = 24; s->rot = 0.0;
+
+            colorSearch = st;
+            while (colorSearch < next) {
+                int cr, cg, cb, sw;
+                if (sscanf(colorSearch, "CreateSolidBrush(RGB(%d,%d,%d))", &cr, &cg, &cb) == 3) { s->fill = RGB(cr, cg, cb); s->useFill = 1; }
+                if (sscanf(colorSearch, "CreatePen(PS_SOLID, %d, RGB(%d,%d,%d))", &sw, &cr, &cg, &cb) == 4) { s->stroke = RGB(cr, cg, cb); s->useStroke = 1; s->strokeWidth = sw; }
+                else if (sscanf(colorSearch, "CreatePen(PS_SOLID, 1, RGB(%d,%d,%d))", &cr, &cg, &cb) == 3) { s->stroke = RGB(cr, cg, cb); s->useStroke = 1; s->strokeWidth = 1; }
+                colorSearch++;
             }
 
             if (next == pt) {
-                char* searchLimit = endBlock;
-                char* nPt = strstr(next + 1, "POINT "); if (nPt && nPt < searchLimit) searchLimit = nPt;
-                char* nL = strstr(next + 1, "L("); if (nL && nL < searchLimit) searchLimit = nL;
-                char* nEx = strstr(next + 1, "EXT_REF("); if (nEx && nEx < searchLimit) searchLimit = nEx;
-                char* nTg = strstr(next + 1, "TAG_TEXT("); if (nTg && nTg < searchLimit) searchLimit = nTg;
-                char* nDim = strstr(next + 1, "DIMENSION("); if (nDim && nDim < searchLimit) searchLimit = nDim;
-
-                char saved = *searchLimit; *searchLimit = '\0';
-                s->type = strstr(next, "Polyline(") ? 2 : 0; *searchLimit = saved;
-
                 char *pC = next, *bracket = strchr(next, '}');
+                char *polyChk = strstr(next, "Polyline(");
+                char *polyGon = strstr(next, "POLY(");
+                s->type = (polyChk && (!polyGon || polyChk < polyGon)) ? 2 : 0;
+                
                 while (bracket && (pC = strstr(pC, "PT(")) != NULL && pC < bracket) {
                     char* comma = strchr(pC + 3, ',');
                     if (comma && comma < bracket && s->ptCount < MAX_POINTS) {
-                        double vX = atof(pC + 3); double vY = atof(comma + 1);
-                        s->ptsX[s->ptCount] = vX; s->ptsY[s->ptCount] = vY; s->ptCount++;
+                        s->ptsX[s->ptCount] = atof(pC + 3); s->ptsY[s->ptCount] = atof(comma + 1); s->ptCount++;
                     }
                     pC += 3;
                 }
                 if (s->ptCount > 0) ref->shapeCount++;
             } else if (next == lStr) {
-                char* pOpen = strchr(next, '(');
-                if (pOpen) {
-                    char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL; char* c3 = c2 ? strchr(c2 + 1, ',') : NULL;
-                    if (c1 && c2 && c3) {
-                        double x1 = atof(pOpen + 1); double y1 = atof(c1 + 1);
-                        double x2 = atof(c2 + 1); double y2 = atof(c3 + 1);
-                        s->type = 1; s->ptCount = 2;
-                        s->ptsX[0] = x1; s->ptsY[0] = y1; s->ptsX[1] = x2; s->ptsY[1] = y2;
-                        ref->shapeCount++;
-                    }
-                }
+                s->type = 1; s->ptCount = 2;
+                if (sscanf(next, "L(%lf,%lf,%lf,%lf)", &s->ptsX[0], &s->ptsY[0], &s->ptsX[1], &s->ptsY[1]) == 4) ref->shapeCount++;
             } else if (next == ext) {
                 static char refStr[128]; static char tagStr[256]; tagStr[0] = '\0';
-                char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                char* pOpen = strchr(next, '(');
+                char* q1 = pOpen ? FindQuote(pOpen) : NULL;
+                char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
                 if (pOpen && q1 && q2) {
-                    char* comma1 = strchr(pOpen + 1, ','); int rLen = q2 - (q1 + 1); if (rLen > 127) rLen = 127;
+                    char* comma1 = strchr(pOpen + 1, ',');
+                    int rLen = q2 - (q1 + 1); if (rLen > 127) rLen = 127;
                     strncpy(refStr, q1 + 1, rLen); refStr[rLen] = '\0';
+                    
                     char* comma3 = q2 ? strchr(q2 + 1, ',') : NULL;
                     if (comma3) {
                         char* q3 = FindQuote(comma3); char* q4 = q3 ? FindQuote(q3 + 1) : NULL;
@@ -1119,41 +1324,87 @@ void SilentLoadC(const char* path, RefCache* ref) {
                             strncpy(tagStr, q3 + 1, tLen); tagStr[tLen] = '\0';
                         }
                     }
-                    double px = atof(pOpen + 1); double py = comma1 ? atof(comma1 + 1) : 0.0;
-                    s->type = 3; s->ptsX[0] = px; s->ptsY[0] = py; s->ptCount = 1;
-                    strcpy(s->text, refStr); UnescapeCString(tagStr, s->tagData, 128);
+                    s->type = 3; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = comma1 ? atof(comma1 + 1) : 0.0;
+                    s->ptCount = 1; strcpy(s->text, refStr); 
+                    UnescapeCString(tagStr, s->tagData, 128);
                     ref->shapeCount++;
                 }
-            } else if (next == tag) {
+            } else if (next == dTxt) {
                 char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                if (pOpen) {
+                    char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+                    char* c3 = c2 ? strchr(c2 + 1, ',') : NULL; char* c4 = c3 ? strchr(c3 + 1, ',') : NULL;
+                    if (c4 && (!q1 || c4 < q1)) {
+                        s->type = 5; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = atof(c1 + 1);
+                        s->ptsX[1] = atof(c2 + 1); s->ptsY[1] = atof(c3 + 1); s->ptCount = 2;
+                        char* pClose = strrchr(next, ')');
+                        if (q1 && q2 && q1 < pClose) {
+                            int tLen = q2 - (q1 + 1); if (tLen > 127) tLen = 127;
+                            static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0';
+                            UnescapeCString(rawTag, s->text, 128);
+                            char* commaAfter = strchr(q2, ',');
+                            if (commaAfter && commaAfter < pClose) {
+                                char jChar = 'L'; char* jPtr = commaAfter + 1;
+                                while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
+                                char* comma4 = strchr(commaAfter + 1, ',');
+                                if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                            } else s->useFill = 0;
+                        }
+                        ref->shapeCount++;
+                    }
+                }
+            } else if (next == tag) {
+                char* pOpen = strchr(next, '(');
+                char* q1 = pOpen ? FindQuote(pOpen) : NULL;
+                char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                
                 if (pOpen) {
                     char* comma1 = strchr(pOpen, ',');
                     if (comma1 && (!q1 || comma1 < q1)) {
-                        double px = atof(pOpen + 1); double py = atof(comma1 + 1);
-                        s->type = 4; s->ptsX[0] = px; s->ptsY[0] = py; s->ptCount = 1;
-                        char* comma2 = strchr(comma1 + 1, ','); char* pClose = strchr(comma2 ? comma2 : pOpen, ')');
+                        s->type = 4; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = atof(comma1 + 1); s->ptCount = 1;
+                        char* comma2 = strchr(comma1 + 1, ',');
+                        char* pClose = strchr(comma2 ? comma2 : pOpen, ')');
 
                         if (q1 && q2 && q1 < pClose) {
                             int tLen = q2 - (q1 + 1); if (tLen > 127) tLen = 127;
-                            static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0'; UnescapeCString(rawTag, s->text, 128);
+                            static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0';
+                            UnescapeCString(rawTag, s->text, 128);
+                            
                             char* commaAfter = strchr(q2, ',');
                             if (commaAfter && commaAfter < pClose) {
-                                char jChar = 'L'; char* jPtr = commaAfter + 1; while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                char jChar = 'L'; char* jPtr = commaAfter + 1;
+                                while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++;
+                                jChar = toupper((unsigned char)*jPtr);
                                 if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
-                                char* comma4 = strchr(commaAfter + 1, ','); if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                char* comma4 = strchr(commaAfter + 1, ',');
+                                if (comma4 && comma4 < pClose) {
+                                    s->fontSize = atoi(comma4 + 1);
+                                    char* comma5 = strchr(comma4 + 1, ',');
+                                    if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                }
                             } else s->useFill = 0;
                         } else if (comma2) {
-                            char* comma3 = strchr(comma2 + 1, ','); char* endMarker = comma3 ? comma3 : pClose;
+                            char* comma3 = strchr(comma2 + 1, ',');
+                            char* endMarker = comma3 ? comma3 : pClose;
                             if (endMarker) {
                                 int tLen = endMarker - (comma2 + 1); if (tLen > 127) tLen = 127;
                                 static char rawTag[256]; strncpy(rawTag, comma2 + 1, tLen); rawTag[tLen] = '\0';
                                 char* start = rawTag; while(*start && isspace((unsigned char)*start)) start++;
                                 char* end = start + strlen(start) - 1; while(end > start && isspace((unsigned char)*end)) *end-- = '\0';
                                 UnescapeCString(start, s->text, 128);
+                                
                                 if (comma3) {
-                                    char jChar = 'L'; char* jPtr = comma3 + 1; while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                    char jChar = 'L'; char* jPtr = comma3 + 1;
+                                    while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++;
+                                    jChar = toupper((unsigned char)*jPtr);
                                     if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
-                                    char* comma4 = strchr(comma3 + 1, ','); if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                    char* comma4 = strchr(comma3 + 1, ',');
+                                    if (comma4 && comma4 < pClose) {
+                                        s->fontSize = atoi(comma4 + 1);
+                                        char* comma5 = strchr(comma4 + 1, ',');
+                                        if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                    }
                                 } else s->useFill = 0;
                             }
                         }
@@ -1185,7 +1436,7 @@ void SilentLoadSVG(const char* path, RefCache* ref) {
         return;
     }
 
-    d = (char*)calloc(1, (size_t)sz + 1);
+    d = (char*)calloc((size_t)sz + 1, 1);
     if (!d) {
         fclose(f);
         return;
@@ -1264,7 +1515,6 @@ void SilentLoadSVG(const char* path, RefCache* ref) {
     }
     free(d);
 }
-
 LRESULT CALLBACK ScaleDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -1436,7 +1686,6 @@ LRESULT CALLBACK TagEditorProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
     }
     return 0;
 }
-
 void UnescapeCString(const char* in, char* out, int maxLen) {
     int len = 0;
     if (!in || !out) return;
@@ -1448,7 +1697,6 @@ void UnescapeCString(const char* in, char* out, int maxLen) {
     }
     *out = '\0';
 }
-
 void UnescapeNewlines(const char* in, char* out) {
     while (*in) {
         if (*in == '\\' && *(in+1) == 'n') { *out++ = '\r'; *out++ = '\n'; in += 2; }
@@ -1470,7 +1718,6 @@ void RedrawCanvas(HWND hwnd) {
     r.bottom = clientH - 20; 
     InvalidateRect(hwnd, &r, TRUE); 
 }
-
 void SaveState(void) { 
     int i; Shape* temp;
     if (!shapes || !history[0]) return;
@@ -1530,7 +1777,7 @@ void CommitCurrentIcon(void) {
     if (currentIconIdx >= 0 && currentIconIdx < parsedCount) {
         if (parsedIcons[currentIconIdx].shapes) { free(parsedIcons[currentIconIdx].shapes); parsedIcons[currentIconIdx].shapes = NULL; }
         if (shapeCount > 0) {
-            parsedIcons[currentIconIdx].shapes = (Shape*)calloc(1, sizeof(Shape) * shapeCount);
+            parsedIcons[currentIconIdx].shapes = (Shape*)calloc(shapeCount, sizeof(Shape));
             if (parsedIcons[currentIconIdx].shapes) memcpy(parsedIcons[currentIconIdx].shapes, shapes, sizeof(Shape) * shapeCount);
         } else {
             parsedIcons[currentIconIdx].shapes = NULL;
@@ -1607,200 +1854,140 @@ void SwitchToIcon(int idx) {
     RedrawCanvas(hMain);
 }
 
-void LoadCFile(const char* path, HWND hwnd) {
+int LoadCFile(const char* path) {
     FILE* f; long sz; char *d, *cur, *endBlock, *st, *pt, *lStr, *ext, *tag, *next;
-    int i, cId, tmpCount, tmpDimCount; Shape* exact;
-    static Dimension tmpDims[MAX_DIMS];
+    int i, cId, tmpCount, tmpDimCount;
+    Shape* tmpShapes[MAX_SHAPES];
+    Dimension tmpDims[MAX_DIMS];
 
-    f = fopen(path, "rb"); if (!f) return;
+    memset(tmpShapes, 0, sizeof(tmpShapes));
+    FreeAllData();
+
+    strcpy(loadedCFile, path);
+    f = fopen(path, "rb"); 
+    if (!f) { loadedCFile[0] = '\0'; return 0; }
+    
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
-    if (sz <= 0 || sz > 60000L) { fclose(f); ShowStatus(" Error: File invalid or exceeds 60KB limit."); return; }
-
-    for (i = 0; i < MAX_ICONS; i++) {
-        if (parsedIcons[i].shapes) { free(parsedIcons[i].shapes); parsedIcons[i].shapes = NULL; }
-        parsedIcons[i].shapeCount = 0; parsedIcons[i].dimCount = 0;
-    }
-    parsedCount = 0; refCacheCount = 0; currentIconIdx = -1; shapeCount = 0; dimCount = 0;
+    if (sz <= 0 || sz > 60000L) { fclose(f); loadedCFile[0] = '\0'; return 0; }
 
     d = (char*)calloc(1, (size_t)sz + 1);
     if (d) {
         fread(d, 1, (size_t)sz, f); d[sz] = '\0'; fclose(f); cur = d;
-
         while ((cur = strstr(cur, "case ")) != NULL && parsedCount < MAX_ICONS) {
-            char tmpPageName[64]; char tmpUnitName[32]; double tmpPageScale;
-            int tH = 32, tW = 32;
+            char tmpPageName[64]; char tmpUnitName[32]; double tmpPageScale; char tmpTitle[64];
+            int tmpGridH = 0, tmpGridW = 0;
+            
             cId = atoi(cur + 5); endBlock = strstr(cur, "break;");
             tmpCount = 0; tmpDimCount = 0; st = cur;
-            strcpy(tmpPageName, "A4 (210x297)"); strcpy(tmpUnitName, "mm"); tmpPageScale = 1.0;
-            strcpy(parsedIcons[parsedCount].iconTitle, "Untitled");
+            strcpy(tmpPageName, "A4 (210x297)"); strcpy(tmpUnitName, "mm"); tmpPageScale = 1.0; tmpTitle[0] = '\0';
             if (!endBlock) endBlock = cur + strlen(cur);
 
             while (st < endBlock && tmpCount < MAX_SHAPES) {
-                Shape* s = &dragStartSnapshot[tmpCount];
+                char* colorSearch; 
                 char *dim = strstr(st, "DIMENSION(");
                 char *pgDef = strstr(st, "PAGE_DEF(");
+                char *dTxt = strstr(st, "DRAW_TEXT(");
                 pt = strstr(st, "POINT "); lStr = strstr(st, "L(");
                 ext = strstr(st, "EXT_REF("); tag = strstr(st, "TAG_TEXT(");
+                char *tagRot = strstr(st, "TAG_TEXT_ROT(");
+                Shape* s;
+
+                if (tagRot && (!tag || tagRot < tag)) tag = tagRot;
 
                 next = pt ? pt : lStr;
                 if (lStr && (!next || lStr < next)) next = lStr;
                 if (ext && (!next || ext < next)) next = ext;
                 if (tag && (!next || tag < next)) next = tag;
+                if (dTxt && (!next || dTxt < next)) next = dTxt;
                 if (dim && (!next || dim < next)) next = dim;
                 if (pgDef && (!next || pgDef < next)) next = pgDef;
                 if (!next || next >= endBlock) break;
 
                 if (next == pgDef) {
                     char* pOpen = strchr(next, '(');
-                    char* qTStart = pOpen ? FindQuote(pOpen) : NULL;
-                    char* qTEnd = qTStart ? FindQuote(qTStart + 1) : NULL;
-
-                    if (qTStart && qTEnd) {
-                        int len = qTEnd - (qTStart + 1); if (len > 63) len = 63;
-                        strncpy(parsedIcons[parsedCount].iconTitle, qTStart + 1, len);
-                        parsedIcons[parsedCount].iconTitle[len] = '\0';
+                    char* q1 = pOpen ? FindQuote(pOpen) : NULL;
+                    char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                    char* comma1 = q2 ? strchr(q2 + 1, ',') : NULL;
+                    char* comma2 = comma1 ? strchr(comma1 + 1, ',') : NULL;
+                    char* q3 = comma2 ? FindQuote(comma2 + 1) : NULL;
+                    char* q4 = q3 ? FindQuote(q3 + 1) : NULL;
+                    char* q5 = q4 ? FindQuote(q4 + 1) : NULL;
+                    char* q6 = q5 ? FindQuote(q5 + 1) : NULL;
+                    char* commaFinal = q6 ? strchr(q6 + 1, ',') : NULL;
+                    
+                    if (q1 && q2 && comma1 && comma2 && q3 && q4 && q5 && q6 && commaFinal) {
+                        int l0 = q2 - (q1 + 1); if (l0 > 63) l0 = 63;
+                        strncpy(tmpTitle, q1 + 1, l0); tmpTitle[l0] = '\0';
                         
-                        char* comma1 = strchr(qTEnd + 1, ',');
-                        if (comma1) {
-                            char* c1_val = comma1 + 1;
-                            while (*c1_val && isspace((unsigned char)*c1_val)) c1_val++;
-                            
-                            if (*c1_val == '"') {
-                                tH = 32; tW = 32;
-                                char* qPStart = FindQuote(comma1);
-                                char* qPEnd = qPStart ? FindQuote(qPStart + 1) : NULL;
-                                if (qPStart && qPEnd) {
-                                    len = qPEnd - (qPStart + 1); if (len > 63) len = 63;
-                                    strncpy(tmpPageName, qPStart + 1, len); tmpPageName[len] = '\0';
-                                    
-                                    char* qUStart = FindQuote(qPEnd + 1);
-                                    char* qUEnd = qUStart ? FindQuote(qUStart + 1) : NULL;
-                                    if (qUStart && qUEnd) {
-                                        len = qUEnd - (qUStart + 1); if (len > 31) len = 31;
-                                        strncpy(tmpUnitName, qUStart + 1, len); tmpUnitName[len] = '\0';
-                                        
-                                        char* commaScale = strchr(qUEnd + 1, ',');
-                                        if (commaScale) tmpPageScale = atof(commaScale + 1);
-                                    }
-                                }
-                            } else {
-                                tH = atoi(c1_val);
-                                char* comma2 = strchr(c1_val, ',');
-                                if (comma2) {
-                                    tW = atoi(comma2 + 1);
-                                    char* qPStart = FindQuote(comma2 + 1);
-                                    char* qPEnd = qPStart ? FindQuote(qPStart + 1) : NULL;
-                                    if (qPStart && qPEnd) {
-                                        len = qPEnd - (qPStart + 1); if (len > 63) len = 63;
-                                        strncpy(tmpPageName, qPStart + 1, len); tmpPageName[len] = '\0';
-                                        
-                                        char* qUStart = FindQuote(qPEnd + 1);
-                                        char* qUEnd = qUStart ? FindQuote(qUStart + 1) : NULL;
-                                        if (qUStart && qUEnd) {
-                                            len = qUEnd - (qUStart + 1); if (len > 31) len = 31;
-                                            strncpy(tmpUnitName, qUStart + 1, len); tmpUnitName[len] = '\0';
-                                            
-                                            char* commaScale = strchr(qUEnd + 1, ',');
-                                            if (commaScale) tmpPageScale = atof(commaScale + 1);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        tmpGridH = atoi(comma1 + 1);
+                        tmpGridW = atoi(comma2 + 1);
+                        
+                        int l1 = q4 - (q3 + 1); if (l1 > 63) l1 = 63;
+                        strncpy(tmpPageName, q3 + 1, l1); tmpPageName[l1] = '\0';
+                        
+                        int l2 = q6 - (q5 + 1); if (l2 > 31) l2 = 31;
+                        strncpy(tmpUnitName, q5 + 1, l2); tmpUnitName[l2] = '\0';
+                        
+                        tmpPageScale = atof(commaFinal + 1);
                     }
-                    if (tH <= 0) tH = 32; if (tW <= 0) tW = 32;
                     st = strchr(next, ';'); if (!st) st = next + 1; continue;
                 }
 
                 if (next == dim) { 
-                    char* pOpen = strchr(next, '(');
-                    if (pOpen) {
-                        char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
-                        char* c3 = c2 ? strchr(c2 + 1, ',') : NULL; char* c4 = c3 ? strchr(c3 + 1, ',') : NULL;
-                        char* c5 = c4 ? strchr(c4 + 1, ',') : NULL; char* c6 = c5 ? strchr(c5 + 1, ',') : NULL;
-                        if (c1 && c2 && c3 && c4 && c5 && c6 && tmpDimCount < MAX_DIMS) {
-                            int vS1 = atoi(pOpen + 1); int vP1 = atoi(c1 + 1);
-                            int vS2 = atoi(c2 + 1); int vP2 = atoi(c3 + 1);
-                            double vOff = atof(c4 + 1); double vTPos = atof(c5 + 1); int vMd = atoi(c6 + 1);
-                            
-                            tmpDims[tmpDimCount].s1 = vS1; tmpDims[tmpDimCount].p1 = vP1;
-                            tmpDims[tmpDimCount].s2 = vS2; tmpDims[tmpDimCount].p2 = vP2;
-                            tmpDims[tmpDimCount].offset = vOff; tmpDims[tmpDimCount].textPos = vTPos;
-                            tmpDims[tmpDimCount].mode = vMd; tmpDimCount++;
+                    int s1, p1, s2, p2, md; double off, tp;
+                    if (sscanf(next, "DIMENSION(%d , %d , %d , %d , %lf , %lf , %d)", &s1, &p1, &s2, &p2, &off, &tp, &md) == 7) {
+                        if (tmpDimCount < MAX_DIMS) {
+                            tmpDims[tmpDimCount].s1 = s1; tmpDims[tmpDimCount].p1 = p1;
+                            tmpDims[tmpDimCount].s2 = s2; tmpDims[tmpDimCount].p2 = p2;
+                            tmpDims[tmpDimCount].offset = off; tmpDims[tmpDimCount].textPos = tp;
+                            tmpDims[tmpDimCount].mode = md; tmpDimCount++;
                         }
                     }
                     st = strchr(next, ';'); if (!st) st = next + 1; continue; 
                 }
 
-                memset(s, 0, sizeof(Shape));
-                s->useFill = 1; s->useStroke = 1; s->fill = RGB(128, 128, 128); s->stroke = RGB(0, 0, 0); s->strokeWidth = 1; s->fontSize = 24;
+                if (!tmpShapes[tmpCount]) tmpShapes[tmpCount] = (Shape*)calloc(1, sizeof(Shape));
+                s = tmpShapes[tmpCount];
+                if (!s) break;
 
-                {
-                    char savedChar = *next; *next = '\0';
-                    char* brushSearch = strstr(st, "CreateSolidBrush(RGB(");
-                    if (brushSearch) {
-                        char* rgb = strstr(brushSearch, "RGB(");
-                        if (rgb) {
-                            int cr = atoi(rgb + 4); char* comma1 = strchr(rgb + 4, ',');
-                            if (comma1) {
-                                int cg = atoi(comma1 + 1); char* comma2 = strchr(comma1 + 1, ',');
-                                if (comma2) { int cb = atoi(comma2 + 1); s->fill = RGB(cr, cg, cb); s->useFill = 1; }
-                            }
-                        }
-                    }
-                    char* penSearch = strstr(st, "CreatePen(PS_SOLID, ");
-                    if (penSearch) {
-                        int sw = atoi(penSearch + 20); char* rgb = strstr(penSearch, "RGB(");
-                        if (rgb) {
-                            int cr = atoi(rgb + 4); char* comma1 = strchr(rgb + 4, ',');
-                            if (comma1) {
-                                int cg = atoi(comma1 + 1); char* comma2 = strchr(comma1 + 1, ',');
-                                if (comma2) { int cb = atoi(comma2 + 1); s->stroke = RGB(cr, cg, cb); s->useStroke = 1; s->strokeWidth = sw > 0 ? sw : 1; }
-                            }
-                        }
-                    }
-                    *next = savedChar;
+                memset(s, 0, sizeof(Shape));
+                s->useFill = 0; s->useStroke = 1; s->fill = RGB(128, 128, 128); s->stroke = RGB(0, 0, 0);
+                s->strokeWidth = 1; s->fontSize = 24; s->rot = 0.0;
+
+                colorSearch = st;
+                while (colorSearch < next) {
+                    int cr, cg, cb, sw;
+                    if (sscanf(colorSearch, "CreateSolidBrush(RGB(%d,%d,%d))", &cr, &cg, &cb) == 3) { s->fill = RGB(cr, cg, cb); s->useFill = 1; }
+                    if (sscanf(colorSearch, "CreatePen(PS_SOLID, %d, RGB(%d,%d,%d))", &sw, &cr, &cg, &cb) == 4) { s->stroke = RGB(cr, cg, cb); s->useStroke = 1; s->strokeWidth = sw; }
+                    else if (sscanf(colorSearch, "CreatePen(PS_SOLID, 1, RGB(%d,%d,%d))", &cr, &cg, &cb) == 3) { s->stroke = RGB(cr, cg, cb); s->useStroke = 1; s->strokeWidth = 1; }
+                    colorSearch++;
                 }
 
                 if (next == pt) {
-                    char* searchLimit = endBlock;
-                    char* nPt = strstr(next + 1, "POINT "); if (nPt && nPt < searchLimit) searchLimit = nPt;
-                    char* nL = strstr(next + 1, "L("); if (nL && nL < searchLimit) searchLimit = nL;
-                    char* nEx = strstr(next + 1, "EXT_REF("); if (nEx && nEx < searchLimit) searchLimit = nEx;
-                    char* nTg = strstr(next + 1, "TAG_TEXT("); if (nTg && nTg < searchLimit) searchLimit = nTg;
-                    char* nDim = strstr(next + 1, "DIMENSION("); if (nDim && nDim < searchLimit) searchLimit = nDim;
-                    char* nPg = strstr(next + 1, "PAGE_DEF("); if (nPg && nPg < searchLimit) searchLimit = nPg;
-
-                    char saved = *searchLimit; *searchLimit = '\0';
-                    s->type = strstr(next, "Polyline(") ? 2 : 0; *searchLimit = saved;
-
                     char *pC = next, *bracket = strchr(next, '}');
+                    char *polyChk = strstr(next, "Polyline(");
+                    char *polyGon = strstr(next, "POLY(");
+                    s->type = (polyChk && (!polyGon || polyChk < polyGon)) ? 2 : 0;
+
                     while (bracket && (pC = strstr(pC, "PT(")) != NULL && pC < bracket) {
                         char* comma = strchr(pC + 3, ',');
                         if (comma && comma < bracket && s->ptCount < MAX_POINTS) {
-                            double vX = atof(pC + 3); double vY = atof(comma + 1);
-                            s->ptsX[s->ptCount] = vX; s->ptsY[s->ptCount] = vY; s->ptCount++;
+                            s->ptsX[s->ptCount] = atof(pC + 3); s->ptsY[s->ptCount] = atof(comma + 1); s->ptCount++;
                         }
                         pC += 3;
                     }
                     if (s->ptCount > 0) tmpCount++;
                 } else if (next == lStr) {
-                    char* pOpen = strchr(next, '(');
-                    if (pOpen) {
-                        char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL; char* c3 = c2 ? strchr(c2 + 1, ',') : NULL;
-                        if (c1 && c2 && c3) {
-                            double x1 = atof(pOpen + 1); double y1 = atof(c1 + 1);
-                            double x2 = atof(c2 + 1); double y2 = atof(c3 + 1);
-                            s->type = 1; s->ptCount = 2;
-                            s->ptsX[0] = x1; s->ptsY[0] = y1; s->ptsX[1] = x2; s->ptsY[1] = y2;
-                            tmpCount++;
-                        }
-                    }
+                    s->type = 1; s->ptCount = 2;
+                    if (sscanf(next, "L(%lf,%lf,%lf,%lf)", &s->ptsX[0], &s->ptsY[0], &s->ptsX[1], &s->ptsY[1]) == 4) tmpCount++;
                 } else if (next == ext) {
                     static char refStr[128]; static char tagStr[256]; tagStr[0] = '\0';
-                    char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                    char* pOpen = strchr(next, '(');
+                    char* q1 = pOpen ? FindQuote(pOpen) : NULL;
+                    char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
                     if (pOpen && q1 && q2) {
-                        char* comma1 = strchr(pOpen + 1, ','); int rLen = q2 - (q1 + 1); if (rLen > 127) rLen = 127;
+                        char* comma1 = strchr(pOpen + 1, ',');
+                        int rLen = q2 - (q1 + 1); if (rLen > 127) rLen = 127;
                         strncpy(refStr, q1 + 1, rLen); refStr[rLen] = '\0';
                         char* comma3 = q2 ? strchr(q2 + 1, ',') : NULL;
                         if (comma3) {
@@ -1810,28 +1997,58 @@ void LoadCFile(const char* path, HWND hwnd) {
                                 strncpy(tagStr, q3 + 1, tLen); tagStr[tLen] = '\0';
                             }
                         }
-                        double px = atof(pOpen + 1); double py = comma1 ? atof(comma1 + 1) : 0.0;
-                        s->type = 3; s->ptsX[0] = px; s->ptsY[0] = py; s->ptCount = 1;
-                        strcpy(s->text, refStr); UnescapeCString(tagStr, s->tagData, 128);
+                        s->type = 3; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = comma1 ? atof(comma1 + 1) : 0.0;
+                        s->ptCount = 1; strcpy(s->text, refStr); 
+                        UnescapeCString(tagStr, s->tagData, 128);
                         tmpCount++;
+                    }
+                } else if (next == dTxt) {
+                    char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
+                    if (pOpen) {
+                        char* c1 = strchr(pOpen, ','); char* c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+                        char* c3 = c2 ? strchr(c2 + 1, ',') : NULL; char* c4 = c3 ? strchr(c3 + 1, ',') : NULL;
+                        if (c4 && (!q1 || c4 < q1)) {
+                            s->type = 5; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = atof(c1 + 1);
+                            s->ptsX[1] = atof(c2 + 1); s->ptsY[1] = atof(c3 + 1); s->ptCount = 2;
+                            char* pClose = strrchr(next, ')');
+                            if (q1 && q2 && q1 < pClose) {
+                                int tLen = q2 - (q1 + 1); if (tLen > 127) tLen = 127;
+                                static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0';
+                                UnescapeCString(rawTag, s->text, 128);
+                                char* commaAfter = strchr(q2, ',');
+                                if (commaAfter && commaAfter < pClose) {
+                                    char jChar = 'L'; char* jPtr = commaAfter + 1;
+                                    while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                    if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
+                                    char* comma4_inner = strchr(commaAfter + 1, ',');
+                                    if (comma4_inner && comma4_inner < pClose) s->fontSize = atoi(comma4_inner + 1);
+                                } else s->useFill = 0;
+                            }
+                            tmpCount++;
+                        }
                     }
                 } else if (next == tag) {
                     char* pOpen = strchr(next, '('); char* q1 = pOpen ? FindQuote(pOpen) : NULL; char* q2 = q1 ? FindQuote(q1 + 1) : NULL;
                     if (pOpen) {
                         char* comma1 = strchr(pOpen, ',');
                         if (comma1 && (!q1 || comma1 < q1)) {
-                            double px = atof(pOpen + 1); double py = atof(comma1 + 1);
-                            s->type = 4; s->ptsX[0] = px; s->ptsY[0] = py; s->ptCount = 1;
+                            s->type = 4; s->ptsX[0] = atof(pOpen + 1); s->ptsY[0] = atof(comma1 + 1); s->ptCount = 1;
                             char* comma2 = strchr(comma1 + 1, ','); char* pClose = strchr(comma2 ? comma2 : pOpen, ')');
-
                             if (q1 && q2 && q1 < pClose) {
                                 int tLen = q2 - (q1 + 1); if (tLen > 127) tLen = 127;
-                                static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0'; UnescapeCString(rawTag, s->text, 128);
+                                static char rawTag[256]; strncpy(rawTag, q1 + 1, tLen); rawTag[tLen] = '\0';
+                                UnescapeCString(rawTag, s->text, 128);
                                 char* commaAfter = strchr(q2, ',');
                                 if (commaAfter && commaAfter < pClose) {
-                                    char jChar = 'L'; char* jPtr = commaAfter + 1; while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                    char jChar = 'L'; char* jPtr = commaAfter + 1;
+                                    while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
                                     if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
-                                    char* comma4 = strchr(commaAfter + 1, ','); if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                    char* comma4 = strchr(commaAfter + 1, ',');
+                                    if (comma4 && comma4 < pClose) {
+                                        s->fontSize = atoi(comma4 + 1);
+                                        char* comma5 = strchr(comma4 + 1, ',');
+                                        if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                    }
                                 } else s->useFill = 0;
                             } else if (comma2) {
                                 char* comma3 = strchr(comma2 + 1, ','); char* endMarker = comma3 ? comma3 : pClose;
@@ -1842,9 +2059,15 @@ void LoadCFile(const char* path, HWND hwnd) {
                                     char* end = start + strlen(start) - 1; while(end > start && isspace((unsigned char)*end)) *end-- = '\0';
                                     UnescapeCString(start, s->text, 128);
                                     if (comma3) {
-                                        char jChar = 'L'; char* jPtr = comma3 + 1; while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
+                                        char jChar = 'L'; char* jPtr = comma3 + 1;
+                                        while (*jPtr && isspace((unsigned char)*jPtr)) jPtr++; jChar = toupper((unsigned char)*jPtr);
                                         if (jChar == 'C') s->useFill = 1; else if (jChar == 'R') s->useFill = 2; else s->useFill = 0;
-                                        char* comma4 = strchr(comma3 + 1, ','); if (comma4 && comma4 < pClose) s->fontSize = atoi(comma4 + 1);
+                                        char* comma4 = strchr(comma3 + 1, ',');
+                                        if (comma4 && comma4 < pClose) {
+                                            s->fontSize = atoi(comma4 + 1);
+                                            char* comma5 = strchr(comma4 + 1, ',');
+                                            if (comma5 && comma5 < pClose) s->rot = atof(comma5 + 1);
+                                        }
                                     } else s->useFill = 0;
                                 }
                             }
@@ -1855,47 +2078,39 @@ void LoadCFile(const char* path, HWND hwnd) {
                 st = strchr(next, ';'); if (!st) st = next + 1;
             }
 
-            parsedIcons[parsedCount].caseId = cId;
-            parsedIcons[parsedCount].dimCount = tmpDimCount;
-            for(i=0; i<tmpDimCount; i++) parsedIcons[parsedCount].dims[i] = tmpDims[i];
-            
-            strcpy(parsedIcons[parsedCount].pageName, tmpPageName);
-            strcpy(parsedIcons[parsedCount].unitName, tmpUnitName);
-            parsedIcons[parsedCount].pageScale = tmpPageScale;
-            parsedIcons[parsedCount].gridW = tW;
-            parsedIcons[parsedCount].gridH = tH;
-            
-            if (tmpCount > 0) {
-                exact = (Shape*)calloc(1, tmpCount * sizeof(Shape));
-                if (exact) { memcpy(exact, dragStartSnapshot, tmpCount * sizeof(Shape)); parsedIcons[parsedCount].shapes = exact; } 
-                else parsedIcons[parsedCount].shapes = NULL;
-            } else parsedIcons[parsedCount].shapes = NULL;
-            parsedIcons[parsedCount].shapeCount = tmpCount; parsedCount++; cur = endBlock;
+            parsedIcons[parsedCount] = (IconDef*)calloc(1, sizeof(IconDef));
+            if (parsedIcons[parsedCount]) {
+                memset(parsedIcons[parsedCount], 0, sizeof(IconDef));
+                parsedIcons[parsedCount]->caseId = cId;
+                parsedIcons[parsedCount]->dimCount = tmpDimCount;
+                for(i=0; i<tmpDimCount; i++) parsedIcons[parsedCount]->dims[i] = tmpDims[i];
+                
+                strcpy(parsedIcons[parsedCount]->name, tmpTitle);
+                strcpy(parsedIcons[parsedCount]->pageName, tmpPageName);
+                strcpy(parsedIcons[parsedCount]->unitName, tmpUnitName);
+                
+                parsedIcons[parsedCount]->pageScale = tmpPageScale;
+                parsedIcons[parsedCount]->gridH = tmpGridH;
+                parsedIcons[parsedCount]->gridW = tmpGridW;
+                
+                for(i = 0; i < tmpCount; i++) {
+                    parsedIcons[parsedCount]->shapes[i] = tmpShapes[i];
+                    tmpShapes[i] = NULL;
+                }
+                parsedIcons[parsedCount]->shapeCount = tmpCount;
+                parsedCount++;
+            }
+            cur = endBlock;
         }
         free(d);
-
-        if (parsedCount > 0) {
-            strcpy(loadedCFile, path);
-            SetScrollRange(hScrlIcon, SB_CTL, 0, parsedCount - 1, TRUE);
-            SwitchToIcon(0); ShowStatus(" C Data File Loaded.");
-        } else {
-            parsedCount = 1; currentCaseId = 1;
-            parsedIcons[0].caseId = 1; strcpy(parsedIcons[0].name, "New");
-            parsedIcons[0].shapes = NULL; parsedIcons[0].shapeCount = 0; 
-            parsedIcons[0].dimCount = 0;
-            parsedIcons[0].gridW = 32; parsedIcons[0].gridH = 32;
-            SetScrollRange(hScrlIcon, SB_CTL, 0, 0, TRUE); SwitchToIcon(0);
-            ShowStatus(" No valid icons found. Reset to default.");
-        }
     } else {
-        fclose(f); ShowStatus(" Error: Could not allocate buffer for file.");
-        parsedCount = 1; currentCaseId = 1;
-        parsedIcons[0].caseId = 1; strcpy(parsedIcons[0].name, "New");
-        parsedIcons[0].shapes = NULL; parsedIcons[0].shapeCount = 0; 
-        parsedIcons[0].dimCount = 0;
-        parsedIcons[0].gridW = 32; parsedIcons[0].gridH = 32;
-        SetScrollRange(hScrlIcon, SB_CTL, 0, 0, TRUE); SwitchToIcon(0);
+        loadedCFile[0] = '\0'; fclose(f); return 0;
     }
+
+    for (i = 0; i < MAX_SHAPES; i++) {
+        if (tmpShapes[i]) free(tmpShapes[i]);
+    }
+    return parsedCount;
 }
 
 void DoSaveFile(HWND hwnd) {
@@ -2056,7 +2271,7 @@ void LoadSVG(const char* path, HWND hwnd, double customScale) {
     if (!f) return;
     fseek(f, 0, SEEK_END); sz = ftell(f); fseek(f, 0, SEEK_SET);
     if (sz > 60000L || sz <= 0) { fclose(f); return; }
-    d = (char*)calloc(1, (size_t)sz + 1);
+    d = (char*)calloc((size_t)sz + 1, 1);
     if (!d) { fclose(f); return; }
     fread(d, 1, (size_t)sz, f); d[sz] = '\0'; fclose(f);
     
@@ -2240,8 +2455,8 @@ void AddEdgesFromShape(Shape* s1, Shape* s2, Edge* pool, int* edgeCount) {
     double x1, y1, x2, y2, x3, y3, x4, y4;
     double den, t, u, ix, iy;
     
-    double* cutsX = (double*)calloc(1, MAX_POINTS * sizeof(double));
-    double* cutsY = (double*)calloc(1, MAX_POINTS * sizeof(double));
+    double* cutsX = (double*)calloc(MAX_POINTS, sizeof(double));
+    double* cutsY = (double*)calloc(MAX_POINTS, sizeof(double));
     int cutCount = 0;
 
     if (!cutsX || !cutsY) {
@@ -2365,7 +2580,7 @@ LRESULT CALLBACK DistEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SendMessage(GetParent(hwnd), WM_APP + 1, 0, 0L);
         }
     }
-    return CallWindowProc((WNDPROC)oldEditProc, hwnd, msg, wParam, lParam);
+    return CallWindowProc(oldEditProc, hwnd, msg, wParam, lParam);
 }
 
 /* --- GDI Rendering Functions --- */
@@ -2415,7 +2630,7 @@ void RenderShapes(HDC dc, Shape* sArr, int sCnt, double sc, int offX, int offY, 
     char dispT[256];
     int depth = g_RenderRefDepth;
 
-    if (depth > 4) return; 
+    if (depth > 4) return;
 
     for (pass = 0; pass < 2; pass++) {
         for (i = 0; i <= sCnt; i++) {
@@ -2539,21 +2754,61 @@ void RenderShapes(HDC dc, Shape* sArr, int sCnt, double sc, int offX, int offY, 
 
                                     int fSize = sub->fontSize > 0 ? sub->fontSize : 24;
                                     int fH = (int)(fSize * refScale * (sc / 10.0)); if (fH < 2) fH = 2;
-                                    HFONT hFont = CreateFont(fH, 0, 0, 0, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
+                                    int escapement = (int)((sub->rot + refRot) * 10.0);
+                                    HFONT hFont = CreateFont(fH, 0, escapement, escapement, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
                                     HGDIOBJ oldFont = SelectObject(dc, hFont);
-
-                                    DrawText(dc, tagBuf, -1, &rTag, DT_CALCRECT | DT_NOPREFIX);
-                                    int tw = rTag.right - rTag.left; int th = rTag.bottom - rTag.top;
-                                    int dtFlags = DT_NOPREFIX;
-                                    if (sub->useFill == 1) { rTag.left = tx - tw/2; rTag.right = tx + tw/2; dtFlags |= DT_CENTER; }
-                                    else if (sub->useFill == 2) { rTag.left = tx - tw; rTag.right = tx; dtFlags |= DT_RIGHT; }
-                                    else { rTag.left = tx; rTag.right = tx + tw; dtFlags |= DT_LEFT; }
-                                    rTag.top = ty; rTag.bottom = ty + th;
                                     
-                                    SetTextColor(dc, sub->stroke); SetBkMode(dc, TRANSPARENT); DrawText(dc, tagBuf, -1, &rTag, dtFlags);
+                                    double subRad = (sub->rot + refRot) * PI / 180.0;
+                                    double cR = cos(subRad), sR = -sin(subRad);
+                                    
+                                    char* line = tagBuf;
+                                    char* nextLine;
+                                    int lineNum = 0, maxW = 0, totalH = 0;
+                                    
+                                    SetTextColor(dc, sub->stroke); 
+                                    SetBkMode(dc, TRANSPARENT); 
+                                    
+                                    while (line) {
+                                        nextLine = strchr(line, '\n');
+                                        if (nextLine) *nextLine = '\0';
+                                        
+                                        SIZE ext;
+                                        GetTextExtentPoint32(dc, line, strlen(line), &ext);
+                                        int lw = ext.cx;
+                                        int lh = ext.cy;
+                                        if (lw > maxW) maxW = lw;
+                                        
+                                        int cdx = 0;
+                                        if (sub->useFill == 1) cdx = -lw/2;
+                                        else if (sub->useFill == 2) cdx = -lw;
+                                        
+                                        int cdy = lineNum * lh;
+                                        totalH += lh;
+                                        
+                                        int c_rx = (int)(cdx * cR - cdy * sR);
+                                        int c_ry = (int)(cdx * sR + cdy * cR);
+                                        
+                                        TextOut(dc, tx + c_rx, ty + c_ry, line, strlen(line));
+                                        
+                                        if (nextLine) { *nextLine = '\n'; line = nextLine + 1; }
+                                        else line = NULL;
+                                        
+                                        lineNum++;
+                                    }
+                                    
                                     SelectObject(dc, oldFont); DeleteObject(hFont);
 
                                     if (textHitCount < 128 && sArr == shapes) {
+                                        rTag.left = tx; rTag.right = tx + maxW;
+                                        if (sub->useFill == 1) { rTag.left -= maxW/2; rTag.right -= maxW/2; }
+                                        else if (sub->useFill == 2) { rTag.left -= maxW; rTag.right -= maxW; }
+                                        rTag.top = ty; rTag.bottom = ty + totalH;
+                                        
+                                        if ((sub->rot + refRot) != 0.0) {
+                                            int rEnl = (int)sqrt(maxW*maxW + totalH*totalH) + 1;
+                                            rTag.left = tx - rEnl; rTag.right = tx + rEnl;
+                                            rTag.top = ty - rEnl; rTag.bottom = ty + rEnl;
+                                        }
                                         textHits[textHitCount].shapeIdx = i; textHits[textHitCount].isRef = 1; textHits[textHitCount].tagIdx = refTagIdx; textHits[textHitCount].box = rTag; textHitCount++;
                                     }
                                 }
@@ -2633,7 +2888,10 @@ void RenderShapes(HDC dc, Shape* sArr, int sCnt, double sc, int offX, int offY, 
 
                                     sMidX = sD1x + (int)round((sD2x - sD1x) * d->textPos); sMidY = sD1y + (int)round((sD2y - sD1y) * d->textPos);
                                     char buf[64]; FormatDimension(val, activeUnitName, buf);
-                                    SIZE ext; GetTextExtentPoint32(dc, buf, strlen(buf), &ext); int tW = ext.cx, tH = ext.cy, tx = sMidX - tW/2, ty = sMidY - tH/2;
+                                    
+                                    SIZE ext; GetTextExtentPoint32(dc, buf, strlen(buf), &ext);
+                                    int tW = ext.cx, tH = ext.cy, tx = sMidX - tW/2, ty = sMidY - tH/2;
+                                    
                                     RECT tR; tR.left = tx - 2; tR.top = ty - 2; tR.right = tx + tW + 2; tR.bottom = ty + tH + 2;
                                     FillRect(dc, &tR, (HBRUSH)GetStockObject(WHITE_BRUSH)); TextOut(dc, tx, ty, buf, strlen(buf));
                                 }
@@ -2672,22 +2930,67 @@ void RenderShapes(HDC dc, Shape* sArr, int sCnt, double sc, int offX, int offY, 
                         else sprintf(dispT, "%g", activePageScale);
                     }
 
-                    int fSize = s->fontSize > 0 ? s->fontSize : 24; int fH = (int)(fSize * (sc / 10.0)); if (fH < 2) fH = 2;
-                    HFONT hFont = CreateFont(fH, 0, 0, 0, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
+                    int fSize = s->fontSize > 0 ? s->fontSize : 24; 
+                    int fH = (int)(fSize * (sc / 10.0)); if (fH < 2) fH = 2;
+                    int escapement = (int)(s->rot * 10.0);
+                    
+                    HFONT hFont = CreateFont(fH, 0, escapement, escapement, FW_NORMAL, 0, 0, 0, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
                     HGDIOBJ oldFont = SelectObject(dc, hFont);
 
-                    RECT rCalc = {0, 0, 0, 0}; DrawText(dc, dispT, -1, &rCalc, DT_CALCRECT | DT_NOPREFIX);
-                    int tw = rCalc.right - rCalc.left, th = rCalc.bottom - rCalc.top, tx = pA[0].x, ty = pA[0].y, dtFlags = DT_NOPREFIX;
+                    int tx = pA[0].x, ty = pA[0].y;
+                    double rad = s->rot * PI / 180.0;
+                    double cosR = cos(rad), sinR = -sin(rad);
+
+                    char* line = dispT;
+                    char* nextLine;
+                    int lineNum = 0, maxW = 0, totalH = 0;
+
+                    SetTextColor(dc, s->stroke); 
+                    SetBkMode(dc, TRANSPARENT); 
                     
-                    if (s->useFill == 1) { tr.left = tx - tw/2; tr.right = tx + tw/2; dtFlags |= DT_CENTER; }
-                    else if (s->useFill == 2) { tr.left = tx - tw; tr.right = tx; dtFlags |= DT_RIGHT; }
-                    else { tr.left = tx; tr.right = tx + tw; dtFlags |= DT_LEFT; }
-                    tr.top = ty; tr.bottom = ty + th;
-                    
-                    SetTextColor(dc, s->stroke); SetBkMode(dc, TRANSPARENT); DrawText(dc, dispT, -1, &tr, dtFlags);
+                    while (line) {
+                        nextLine = strchr(line, '\n');
+                        if (nextLine) *nextLine = '\0';
+                        
+                        SIZE ext;
+                        GetTextExtentPoint32(dc, line, strlen(line), &ext);
+                        int lw = ext.cx;
+                        int lh = ext.cy;
+                        if (lw > maxW) maxW = lw;
+                        
+                        int dx = 0;
+                        if (s->useFill == 1) dx = -lw/2;
+                        else if (s->useFill == 2) dx = -lw;
+                        
+                        int dy = lineNum * lh;
+                        totalH += lh;
+                        
+                        int rx = (int)(dx * cosR - dy * sinR);
+                        int ry = (int)(dx * sinR + dy * cosR);
+                        
+                        TextOut(dc, tx + rx, ty + ry, line, strlen(line));
+                        
+                        if (nextLine) { *nextLine = '\n'; line = nextLine + 1; }
+                        else line = NULL;
+                        
+                        lineNum++;
+                    }
                     SelectObject(dc, oldFont); DeleteObject(hFont);
 
-                    if (textHitCount < 128 && sArr == shapes) { textHits[textHitCount].shapeIdx = i; textHits[textHitCount].isRef = 0; textHits[textHitCount].tagIdx = -1; textHits[textHitCount].box = tr; textHitCount++; }
+                    if (textHitCount < 128 && sArr == shapes) {
+                        tr.left = tx; tr.right = tx + maxW;
+                        if (s->useFill == 1) { tr.left -= maxW/2; tr.right -= maxW/2; }
+                        else if (s->useFill == 2) { tr.left -= maxW; tr.right -= maxW; }
+                        tr.top = ty; tr.bottom = ty + totalH;
+                        
+                        if (s->rot != 0.0) {
+                            int r = (int)sqrt(maxW*maxW + totalH*totalH) + 1;
+                            tr.left = tx - r; tr.right = tx + r;
+                            tr.top = ty - r; tr.bottom = ty + r;
+                        }
+                        
+                        textHits[textHitCount].shapeIdx = i; textHits[textHitCount].isRef = 0; textHits[textHitCount].tagIdx = -1; textHits[textHitCount].box = tr; textHitCount++;
+                    }
                 }
                 continue;
             }
@@ -2894,7 +3197,6 @@ void DrawDimensions(HDC dc) {
     SelectObject(dc, oldBr); DeleteObject(hBr); DeleteObject(hHandleBr);
     SelectObject(dc, oldFont); DeleteObject(hFont);
 }
-
 void WriteShapeToC(FILE* f, Shape* s, int j) {
     int k; char escV[512];
     if (s->type == 3) {
@@ -2908,7 +3210,11 @@ void WriteShapeToC(FILE* f, Shape* s, int j) {
     } else if (s->type == 4) {
         char jChar = (s->useFill == 1) ? 'C' : ((s->useFill == 2) ? 'R' : 'L');
         EscapeCString(s->text, escV, 512);
-        fprintf(f, "    TAG_TEXT(%g, %g, \"%s\", %c, %d);\n", s->ptsX[0], s->ptsY[0], escV, jChar, s->fontSize > 0 ? s->fontSize : 24);
+        if (s->rot != 0.0) {
+            fprintf(f, "    TAG_TEXT_ROT(%g, %g, \"%s\", %c, %d, %g);\n", s->ptsX[0], s->ptsY[0], escV, jChar, s->fontSize > 0 ? s->fontSize : 24, s->rot);
+        } else {
+            fprintf(f, "    TAG_TEXT(%g, %g, \"%s\", %c, %d);\n", s->ptsX[0], s->ptsY[0], escV, jChar, s->fontSize > 0 ? s->fontSize : 24);
+        }
         return;
     }
     
@@ -2977,7 +3283,6 @@ void CmdToRef(HWND hwnd) {
         
         SaveState();
         
-        /* Remove selected shapes */
         for (i=shapeCount-1; i>=0; i--) {
             int isSel = (i == selectedShape);
             if (!isSel) {
@@ -3001,7 +3306,6 @@ void CmdToRef(HWND hwnd) {
             }
         }
         
-        /* Insert the reference shape */
         if (shapeCount < MAX_SHAPES) {
             char relPath[260];
             if (loadedCFile[0]) GetRelativePath(loadedCFile, szFile, relPath);
@@ -3158,21 +3462,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             hMain = hwnd;
             DragAcceptFiles(hwnd, TRUE);
 
-            shapes = (Shape*)calloc(1, (DWORD)MAX_SHAPES * sizeof(Shape));
-            dragStartSnapshot = (Shape*)calloc(1, (DWORD)MAX_SHAPES * sizeof(Shape));
+            shapes = (Shape*)calloc(MAX_SHAPES, sizeof(Shape));
+            dragStartSnapshot = (Shape*)calloc(MAX_SHAPES, sizeof(Shape));
             
-            g_tempRef = (Shape*)calloc(1, 5 * sizeof(Shape));
-            g_subPts = (POINT*)calloc(1, 5 * MAX_POINTS * sizeof(POINT));
-            g_pA = (POINT*)calloc(1, 5 * MAX_POINTS * sizeof(POINT));
+            g_tempRef = (Shape*)calloc(5, sizeof(Shape));
+            g_subPts = (POINT*)calloc(5 * MAX_POINTS, sizeof(POINT));
+            g_pA = (POINT*)calloc(5 * MAX_POINTS, sizeof(POINT));
 
             for(i=0; i<MAX_UNDO; i++) {
-                history[i] = (Shape*)calloc(1, (DWORD)MAX_SHAPES * sizeof(Shape));
+                history[i] = (Shape*)calloc(MAX_SHAPES, sizeof(Shape));
                 if (!history[i]) allocFailed = 1;
             }
             
-            parsedIcons = (IconDef*)calloc(1, (DWORD)MAX_ICONS * sizeof(IconDef));
-            refCache = (RefCache*)calloc(1, (DWORD)MAX_REFS * sizeof(RefCache));
-            editMap = (TagEditMap*)calloc(1, (DWORD)MAX_EDIT_TAGS * sizeof(TagEditMap));
+            parsedIcons = (IconDef*)calloc(MAX_ICONS, sizeof(IconDef));
+            refCache = (RefCache*)calloc(MAX_REFS, sizeof(RefCache));
+            editMap = (TagEditMap*)calloc(MAX_EDIT_TAGS, sizeof(TagEditMap));
 
             if (!shapes || !dragStartSnapshot || allocFailed || !parsedIcons || !refCache || !editMap || !g_tempRef || !g_subPts || !g_pA) {
                 MessageBox(hwnd, "Failed to allocate memory on Heap!", "Error", MB_ICONHAND);
@@ -3211,10 +3515,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             for(i = 0; i < 36; i++) hBtn[i] = CreateWindow("BUTTON", bT[i], WS_CHILD|WS_VISIBLE, 0,0,1,1, hwnd, (HMENU)(200+i), hInst, NULL);
             
             hDistEdit = CreateWindow("EDIT", "", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 0, 0, 60, 20, hwnd, (HMENU)300, hInst, NULL);
-            oldEditProc = (FARPROC)SetWindowLongPtr(hDistEdit, GWLP_WNDPROC, (LONG_PTR)DistEditProc);
+            oldEditProc = (WNDPROC)SetWindowLongPtr(hDistEdit, GWLP_WNDPROC, (LONG_PTR)DistEditProc);
 
             hMultiEdit = CreateWindow("EDIT", "", WS_CHILD | WS_BORDER | ES_MULTILINE | ES_WANTRETURN | ES_AUTOVSCROLL, 0, 0, 150, 60, hwnd, (HMENU)301, hInst, NULL);
-            oldMultiEditProc = (FARPROC)SetWindowLongPtr(hMultiEdit, GWLP_WNDPROC, (LONG_PTR)MultiEditProc);
+            oldMultiEditProc = (WNDPROC)SetWindowLongPtr(hMultiEdit, GWLP_WNDPROC, (LONG_PTR)MultiEditProc);
             break;
         }
         case WM_DROPFILES: {
@@ -3256,7 +3560,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             InvalidateRect(hwnd, NULL, TRUE); break;
         }
         case WM_HSCROLL: {
-            HWND hTrk = (HWND)(UINT_PTR)lParam; UINT code = LOWORD(wParam); int pos, p;
+            HWND hTrk = (HWND)(UINT)lParam; UINT code = LOWORD(wParam); int pos, p;
             double minX, maxX, minY, maxY, cx, cy, rx, ry; int sides;
             
             if (hTrk == hScrlIcon) {
@@ -3459,6 +3763,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             int hitDimDrag, hitDimCycle;
             int x, y, cx;
             int tagHit;
+            int pass;
 
             x = (int)(short)LOWORD(lParam); 
             y = (int)(short)HIWORD(lParam); 
@@ -3467,15 +3772,55 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             hitDimDrag = -1; hitDimCycle = -1;
             tagHit = -1;
 
-            if (x >= cx && x < cx + 256 && y >= 382 && y < 414) {
-                currentFill = palette[((y - 382) / 16) * 8 + (x - cx) / 32]; useFill = 1;
-                if (selectedShape != -1) { SaveState(); shapes[selectedShape].fill = currentFill; shapes[selectedShape].useFill = 1; }
-                InvalidateRect(hwnd, NULL, TRUE); return 0;
-            }
-
             if (currentMode == 7) { 
                 dragType = 5; panStartX = x; panStartY = y; 
                 SetCapture(hwnd); return 0; 
+            }
+
+            if (currentMode == 35) {
+                SetFocus(hwnd); SetCapture(hwnd);
+                exactDragStartX = (x - viewPanX) / (scaleFactor * viewZoom);
+                exactDragStartY = (y - viewPanY) / (scaleFactor * viewZoom);
+                startX = CLAMP(Snap(exactDragStartX), 0, gridW); 
+                startY = CLAMP(Snap(exactDragStartY), 0, gridH);
+                
+                if (shapeCount < MAX_SHAPES) {
+                    SaveState();
+                    memset(&currentShape, 0, sizeof(Shape));
+                    currentShape.type = 4;
+                    currentShape.ptsX[0] = startX;
+                    currentShape.ptsY[0] = startY;
+                    currentShape.ptCount = 1;
+                    currentShape.useFill = 0;
+                    currentShape.fontSize = 24;
+                    currentShape.stroke = currentStroke;
+                    currentShape.rot = 0.0;
+                    strcpy(currentShape.text, "Text");
+                    shapes[shapeCount] = currentShape;
+                    
+                    editShapeIdx = shapeCount;
+                    editTagIdx = -1;
+                    shapeCount++;
+                    
+                    selectedShape = editShapeIdx;
+                    ClearSelection();
+                    ToggleSelection(editShapeIdx, 0);
+
+                    distEditMode = 6;
+                    SetWindowText(hMultiEdit, "Text");
+                    
+                    int px = (int)round(startX * (scaleFactor * viewZoom) + viewPanX);
+                    int py = (int)round(startY * (scaleFactor * viewZoom) + viewPanY);
+                    SetWindowPos(hMultiEdit, (HWND)0, px, py, 150, 60, SWP_SHOWWINDOW);
+                    BringWindowToTop(hMultiEdit);
+                    SetFocus(hMultiEdit);
+                    
+                    currentMode = 0;
+                    UpdateStatusBar();
+                    RedrawCanvas(hwnd);
+                }
+                ReleaseCapture();
+                return 0;
             }
 
             if (dimCount > 0) {
@@ -3556,37 +3901,42 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
 
                 if (hitS == -1) {
-                    if (selectedShape != -1 && selectedShape < shapeCount) {
-                        int maxP = (shapes[selectedShape].type == 3 || shapes[selectedShape].type == 4) ? 1 : shapes[selectedShape].ptCount;
-                        for (j = 0; j < maxP; j++) {
-                            int px = (int)round(shapes[selectedShape].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
-                            int py = (int)round(shapes[selectedShape].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
-                            if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = selectedShape; hitP = j; break; }
-                        }
-                    }
-                    if (hitS == -1) {
-                        for (i = shapeCount - 1; i >= 0; i--) {
-                            int maxP = (shapes[i].type == 3 || shapes[i].type == 4) ? 1 : shapes[i].ptCount;
-                            for (j = 0; j < maxP; j++) {
-                                int px = (int)round(shapes[i].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
-                                int py = (int)round(shapes[i].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
-                                if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = i; hitP = j; break; }
+                    for (pass = 0; pass < 2 && hitS == -1; pass++) {
+                        if (selectedShape != -1 && selectedShape < shapeCount && ((pass == 0 && shapes[selectedShape].type != 3) || (pass == 1 && shapes[selectedShape].type == 3))) {
+                            for (j = 0; j < shapes[selectedShape].ptCount; j++) {
+                                int px = (int)round(shapes[selectedShape].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
+                                int py = (int)round(shapes[selectedShape].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
+                                if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = selectedShape; hitP = j; break; }
                             }
-                            if (hitS != -1) break;
+                        }
+                        if (hitS == -1) {
+                            for (i = shapeCount - 1; i >= 0; i--) {
+                                if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                                if (shapes[i].type == 4) continue;
+                                for (j = 0; j < shapes[i].ptCount; j++) {
+                                    int px = (int)round(shapes[i].ptsX[j] * (scaleFactor * viewZoom) + viewPanX);
+                                    int py = (int)round(shapes[i].ptsY[j] * (scaleFactor * viewZoom) + viewPanY);
+                                    if (sqrt(pow(px - x, 2) + pow(py - y, 2)) <= 8.0) { hitS = i; hitP = j; break; }
+                                }
+                                if (hitS != -1) break;
+                            }
                         }
                     }
                 }
 
                 if (hitS == -1) {
-                    if (selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type == 0) {
-                        if (PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[selectedShape])) { hitS = selectedShape; hitP = -1; }
-                    }
-                    if (hitS == -1) {
-                        for (i = shapeCount - 1; i >= 0; i--) { 
-                            if (shapes[i].type == 0 && PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[i])) { 
-                                hitS = i; hitP = -1; break; 
+                    for (pass = 0; pass < 2 && hitS == -1; pass++) {
+                        if (pass == 0 && selectedShape != -1 && selectedShape < shapeCount && shapes[selectedShape].type == 0) {
+                            if (PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[selectedShape])) { hitS = selectedShape; hitP = -1; }
+                        }
+                        if (hitS == -1) {
+                            for (i = shapeCount - 1; i >= 0; i--) { 
+                                if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                                if (shapes[i].type == 0 && PointInPolyShape(exactDragStartX, exactDragStartY, &shapes[i])) { 
+                                    hitS = i; hitP = -1; break; 
+                                } 
                             } 
-                        } 
+                        }
                     }
                 }
 
@@ -3659,7 +4009,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     
                     if (currentMode == 1 || currentMode == 2) {
                         ClearSelection();
-                        if (shapes[hitS].type == 3 || shapes[hitS].type == 4) ToggleSelection(hitS, 0);
+                        if (shapes[hitS].type == 4) ToggleSelection(hitS, 0);
                         else for(j = 0; j < shapes[hitS].ptCount; j++) ToggleSelection(hitS, j);
                         selectedShape = hitS;
                     } else {
@@ -3683,7 +4033,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                 if (!ptSelected[hitS][hitP]) { 
                                     ClearSelection(); 
                                     if (currentMode == 1 || currentMode == 2) {
-                                        if (shapes[hitS].type == 3 || shapes[hitS].type == 4) ToggleSelection(hitS, 0);
+                                        if (shapes[hitS].type == 4) ToggleSelection(hitS, 0);
                                         else for(j = 0; j < shapes[hitS].ptCount; j++) ToggleSelection(hitS, j);
                                     } else {
                                         ToggleSelection(hitS, hitP); 
@@ -3692,7 +4042,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                             } 
                             else if (!sHasSel) { 
                                 ClearSelection(); 
-                                if (shapes[hitS].type == 3 || shapes[hitS].type == 4) ToggleSelection(hitS, 0);
+                                if (shapes[hitS].type == 4) ToggleSelection(hitS, 0);
                                 else for(j = 0; j < shapes[hitS].ptCount; j++) ToggleSelection(hitS, j); 
                             }
                         }
@@ -3778,7 +4128,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_MOUSEMOVE: {
             double nx, ny, dx, dy, bestDist, prX, prY, d, newX, newY, minX, maxX, minY, maxY;
-            int x, y, i, j, p, np, ctrlDown, shiftDown;
+            int x, y, i, j, p, np, ctrlDown, shiftDown, pass;
             double diff, ox, oy, d1, d2, scale, actualDx, actualDy;
             double exactX, exactY;
             
@@ -3970,10 +4320,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                             newCy = shapeCy + (oldCx - shapeCx) * sin(diff) + (oldCy - shapeCy) * cos(diff);
                                             newX2 = newCx - lcx * rSc; 
                                             newY2 = newCy - lcy * rSc;
-                                            shapes[i].ptsX[0] = snapToGrid ? round(newX2) : newX2; shapes[i].ptsY[0] = snapToGrid ? round(newY2) : newY2;
+                                            shapes[i].ptsX[0] = snapToGrid ? round(newX2) : newX2; 
+                                            shapes[i].ptsY[0] = snapToGrid ? round(newY2) : newY2;
                                         }
                                     }
                                 }
+                            } else if (shapes[i].type == 4) {
+                                shapes[i].rot = dragStartSnapshot[i].rot + (diff * 180.0 / PI);
+                                while (shapes[i].rot >= 360.0) shapes[i].rot -= 360.0;
+                                while (shapes[i].rot < 0.0) shapes[i].rot += 360.0;
+                                ox = dragStartSnapshot[i].ptsX[0] - shapeCx;
+                                oy = dragStartSnapshot[i].ptsY[0] - shapeCy;
+                                shapes[i].ptsX[0] = shapeCx + (ox * cos(diff) - oy * sin(diff));
+                                shapes[i].ptsY[0] = shapeCy + (ox * sin(diff) + oy * cos(diff));
                             } else {
                                 for(j = 0; j < shapes[i].ptCount; j++) {
                                     if (ptSelected[i][j]) {
@@ -4030,39 +4389,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             } else if (currentMode == 0 || currentMode == 1 || currentMode == 2 || currentMode == 27) {
                 hoverShape = -1; hoverPt = -1; hoverSegShape = -1; hoverSegPt = -1; bestDist = 99999.0;
                 
-                if (selectedShape != -1 && selectedShape < shapeCount) {
-                    int maxP = (shapes[selectedShape].type == 3 || shapes[selectedShape].type == 4) ? 1 : shapes[selectedShape].ptCount;
-                    for (p = 0; p < maxP; p++) {
-                        d = sqrt(pow(shapes[selectedShape].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[selectedShape].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
-                        if (d < 15.0 && d < bestDist) { hoverShape = selectedShape; hoverPt = p; bestDist = d; }
-                    }
-                }
-                if (hoverPt == -1) {
-                    for (i = 0; i < shapeCount; i++) {
-                        int maxP = (shapes[i].type == 3 || shapes[i].type == 4) ? 1 : shapes[i].ptCount;
-                        for (p = 0; p < maxP; p++) {
-                            d = sqrt(pow(shapes[i].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[i].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
-                            if (d < 15.0 && d < bestDist) { hoverShape = i; hoverPt = p; bestDist = d; }
+                for (pass = 0; pass < 2 && hoverPt == -1; pass++) {
+                    if (selectedShape != -1 && selectedShape < shapeCount && ((pass == 0 && shapes[selectedShape].type != 3) || (pass == 1 && shapes[selectedShape].type == 3))) {
+                        for (p = 0; p < shapes[selectedShape].ptCount; p++) {
+                            d = sqrt(pow(shapes[selectedShape].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[selectedShape].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
+                            if (d < 15.0 && d < bestDist) { hoverShape = selectedShape; hoverPt = p; bestDist = d; }
                         }
                     }
-                }
-                if (hoverPt == -1) {
-                    bestDist = 99999.0;
-                    for (i = 0; i < shapeCount; i++) {
-                        if (shapes[i].type == 3 || shapes[i].type == 4 || shapes[i].ptCount >= MAX_POINTS) continue;
-                        for (p = 0; p < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); p++) {
-                            np = (p + 1) % shapes[i].ptCount;
-                            PtToSegProj((double)exactX, (double)exactY, shapes[i].ptsX[p], shapes[i].ptsY[p], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
-                            if (d < (10.0 / scaleFactor) && d < bestDist) { hoverSegShape = i; hoverSegPt = p; hoverProjX = prX; hoverProjY = prY; bestDist = d; }
-                        }
-                    }
-                }
-                if (hoverPt == -1 && hoverSegShape == -1 && currentMode == 27) {
-                    for (i = 0; i < shapeCount; i++) {
-                        if (shapes[i].type == 3) {
+                    if (hoverPt == -1) {
+                        for (i = 0; i < shapeCount; i++) {
+                            if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                            if (shapes[i].type == 4) continue;
                             for (p = 0; p < shapes[i].ptCount; p++) {
                                 d = sqrt(pow(shapes[i].ptsX[p]*(scaleFactor * viewZoom) + viewPanX - x, 2) + pow(shapes[i].ptsY[p]*(scaleFactor * viewZoom) + viewPanY - y, 2));
                                 if (d < 15.0 && d < bestDist) { hoverShape = i; hoverPt = p; bestDist = d; }
+                            }
+                        }
+                    }
+                }
+
+                if (hoverPt == -1) {
+                    bestDist = 99999.0;
+                    for (pass = 0; pass < 2 && hoverSegShape == -1; pass++) {
+                        for (i = 0; i < shapeCount; i++) {
+                            if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                            if (shapes[i].type == 4 || shapes[i].ptCount >= MAX_POINTS) continue;
+                            for (p = 0; p < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); p++) {
+                                np = (p + 1) % shapes[i].ptCount;
+                                PtToSegProj((double)exactX, (double)exactY, shapes[i].ptsX[p], shapes[i].ptsY[p], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
+                                if (d < (10.0 / scaleFactor) && d < bestDist) { hoverSegShape = i; hoverSegPt = p; hoverProjX = prX; hoverProjY = prY; bestDist = d; }
                             }
                         }
                     }
@@ -4183,7 +4538,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         }
         case WM_LBUTTONDBLCLK: {
-            int x, y, i, j, k, p, s, np, tagHit;
+            int x, y, i, j, k, p, s, np, tagHit, pass;
             int foundSegS, foundSegP;
             double exactX, exactY, bestDist, d, prX, prY, foundPrX, foundPrY;
             double A1x, A1y, A2x, A2y, D1x, D1y, D2x, D2y, midX, midY, val;
@@ -4247,13 +4602,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 foundPrX = 0; foundPrY = 0;
                 foundSegS = -1; foundSegP = -1;
                 
-                for (i = shapeCount - 1; i >= 0; i--) {
-                    if (shapes[i].type == 3 || shapes[i].type == 4 || shapes[i].ptCount < 2) continue;
-                    for (j = 0; j < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); j++) {
-                        np = (j + 1) % shapes[i].ptCount;
-                        PtToSegProj(exactX, exactY, shapes[i].ptsX[j], shapes[i].ptsY[j], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
-                        if (d < (10.0 / scaleFactor) && d < bestDist) { 
-                            foundSegS = i; foundSegP = j; foundPrX = prX; foundPrY = prY; bestDist = d; 
+                for (pass = 0; pass < 2 && foundSegS == -1; pass++) {
+                    for (i = shapeCount - 1; i >= 0; i--) {
+                        if ((pass == 0 && shapes[i].type == 3) || (pass == 1 && shapes[i].type != 3)) continue;
+                        if (shapes[i].type == 4 || shapes[i].ptCount < 2) continue;
+                        for (j = 0; j < (shapes[i].type == 0 ? shapes[i].ptCount : shapes[i].ptCount - 1); j++) {
+                            np = (j + 1) % shapes[i].ptCount;
+                            PtToSegProj(exactX, exactY, shapes[i].ptsX[j], shapes[i].ptsY[j], shapes[i].ptsX[np], shapes[i].ptsY[np], &prX, &prY, &d);
+                            if (d < (10.0 / scaleFactor) && d < bestDist) { 
+                                foundSegS = i; foundSegP = j; foundPrX = prX; foundPrY = prY; bestDist = d; 
+                            }
                         }
                     }
                 }
@@ -4312,42 +4670,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             
             if (distEditMode == 0 && selOrderCount == 2) {
                 s1 = selOrderS[0]; p1 = selOrderP[0]; s2 = selOrderS[1]; p2 = selOrderP[1];
-                dx = shapes[s2].ptsX[p2] - shapes[s1].ptsX[p1]; 
-                dy = shapes[s2].ptsY[p2] - shapes[s1].ptsY[p1];
+                dx = shapes[s2].ptsX[p2] - shapes[s1].ptsX[p1]; dy = shapes[s2].ptsY[p2] - shapes[s1].ptsY[p1];
                 oldVal = sqrt(dx*dx + dy*dy);
-                
                 if (oldVal > 0.0001) {
-                    double shiftX, shiftY;
                     SaveState(); 
-                    scale = newDist / oldVal;
-                    shiftX = dx * scale - dx;
-                    shiftY = dy * scale - dy;
+                    double nX = shapes[s1].ptsX[p1] + dx * (newDist / oldVal); 
+                    double nY = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
+                    double deltaX = nX - shapes[s2].ptsX[p2];
+                    double deltaY = nY - shapes[s2].ptsY[p2];
                     
                     if (lockAxis && s1 == s2) {
-                        if (p1 < p2) {
-                            for (p = 0; p < shapes[s2].ptCount; p++) {
-                                if (p > p1 && p < p2) {
-                                    shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
-                                    shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
-                                } else if (p >= p2) {
-                                    shapes[s2].ptsX[p] += shiftX;
-                                    shapes[s2].ptsY[p] += shiftY;
-                                }
-                            }
-                        } else {
-                            for (p = 0; p < shapes[s2].ptCount; p++) {
-                                if (p < p1 && p > p2) {
-                                    shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
-                                    shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
-                                } else if (p <= p2) {
-                                    shapes[s2].ptsX[p] += shiftX;
-                                    shapes[s2].ptsY[p] += shiftY;
-                                }
+                        for(p = 0; p < shapes[s2].ptCount; p++) {
+                            double t = ((shapes[s2].ptsX[p] - shapes[s1].ptsX[p1])*dx + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1])*dy) / (oldVal*oldVal);
+                            if (t >= 0.5) {
+                                shapes[s2].ptsX[p] += deltaX;
+                                shapes[s2].ptsY[p] += deltaY;
                             }
                         }
                     } else {
-                        shapes[s2].ptsX[p2] += shiftX;
-                        shapes[s2].ptsY[p2] += shiftY;
+                        shapes[s2].ptsX[p2] = nX; 
+                        shapes[s2].ptsY[p2] = nY;
                     }
                 }
             } else if ((distEditMode == 1 || distEditMode == 2) && selectedShape != -1) {
@@ -4419,44 +4761,47 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 else oldVal = fabs(dy);
                 
                 if (oldVal > 0.0001) {
-                    double shiftX = 0, shiftY = 0;
                     SaveState();
-                    scale = newDist / oldVal;
-                    
+                    double nX = shapes[s2].ptsX[p2];
+                    double nY = shapes[s2].ptsY[p2];
+
                     if (dptr->mode == 0) {
-                        shiftX = dx * scale - dx;
-                        shiftY = dy * scale - dy;
+                        nX = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
+                        nY = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
                     } else if (dptr->mode == 1) {
-                        shiftX = dx * scale - dx;
+                        nX = shapes[s1].ptsX[p1] + dx * (newDist / oldVal);
                     } else {
-                        shiftY = dy * scale - dy;
+                        nY = shapes[s1].ptsY[p1] + dy * (newDist / oldVal);
                     }
-                    
+
+                    double deltaX = nX - shapes[s2].ptsX[p2];
+                    double deltaY = nY - shapes[s2].ptsY[p2];
+
                     if (lockAxis && s1 == s2) {
-                        if (p1 < p2) {
-                            for (p = 0; p < shapes[s2].ptCount; p++) {
-                                if (p > p1 && p < p2) {
-                                    if (dptr->mode == 0 || dptr->mode == 1) shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
-                                    if (dptr->mode == 0 || dptr->mode == 2) shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
-                                } else if (p >= p2) {
-                                    shapes[s2].ptsX[p] += shiftX;
-                                    shapes[s2].ptsY[p] += shiftY;
-                                }
+                        for(p = 0; p < shapes[s2].ptCount; p++) {
+                            double t = 0.0;
+                            if (dptr->mode == 0) {
+                                t = ((shapes[s2].ptsX[p] - shapes[s1].ptsX[p1])*dx + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1])*dy) / (oldVal*oldVal);
+                            } else if (dptr->mode == 1) {
+                                t = (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) / dx;
+                            } else {
+                                t = (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) / dy;
                             }
-                        } else {
-                            for (p = 0; p < shapes[s2].ptCount; p++) {
-                                if (p < p1 && p > p2) {
-                                    if (dptr->mode == 0 || dptr->mode == 1) shapes[s2].ptsX[p] = shapes[s1].ptsX[p1] + (shapes[s2].ptsX[p] - shapes[s1].ptsX[p1]) * scale;
-                                    if (dptr->mode == 0 || dptr->mode == 2) shapes[s2].ptsY[p] = shapes[s1].ptsY[p1] + (shapes[s2].ptsY[p] - shapes[s1].ptsY[p1]) * scale;
-                                } else if (p <= p2) {
-                                    shapes[s2].ptsX[p] += shiftX;
-                                    shapes[s2].ptsY[p] += shiftY;
+                            
+                            if (t >= 0.5) {
+                                if (dptr->mode == 0) {
+                                    shapes[s2].ptsX[p] += deltaX;
+                                    shapes[s2].ptsY[p] += deltaY;
+                                } else if (dptr->mode == 1) {
+                                    shapes[s2].ptsX[p] += deltaX;
+                                } else {
+                                    shapes[s2].ptsY[p] += deltaY;
                                 }
                             }
                         }
                     } else {
-                        shapes[s2].ptsX[p2] += shiftX;
-                        shapes[s2].ptsY[p2] += shiftY;
+                        if (dptr->mode == 0 || dptr->mode == 1) shapes[s2].ptsX[p2] = nX;
+                        if (dptr->mode == 0 || dptr->mode == 2) shapes[s2].ptsY[p2] = nY;
                     }
                 }
                 editDimIdx = -1;
@@ -4711,12 +5056,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
                     if (distinctCount == 2 && shapes[distinctShapes[0]].type == 0 && shapes[distinctShapes[1]].type == 0) {
                         s1_idx = distinctShapes[0]; s2_idx = distinctShapes[1]; edgeCount = 0; fCount = 0; loopsFound = 0;
-                        clnX = (double*)calloc(1, MAX_POINTS * sizeof(double));
-                        clnY = (double*)calloc(1, MAX_POINTS * sizeof(double));
-                        pool = (Edge*)calloc(1, 1024 * sizeof(Edge));
-                        filtered = (Edge*)calloc(1, 1024 * sizeof(Edge));
-                        keep = (int*)calloc(1, 1024 * sizeof(int));
-                        used = (int*)calloc(1, 1024 * sizeof(int));
+                        clnX = (double*)calloc(MAX_POINTS, sizeof(double));
+                        clnY = (double*)calloc(MAX_POINTS, sizeof(double));
+                        pool = (Edge*)calloc(1024, sizeof(Edge));
+                        filtered = (Edge*)calloc(1024, sizeof(Edge));
+                        keep = (int*)calloc(1024, sizeof(int));
+                        used = (int*)calloc(1024, sizeof(int));
                         
                         if (pool && filtered && keep && used && clnX && clnY) {
                             SaveState(); 
@@ -4862,7 +5207,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 else if (btnId == 33) { CmdToRef(hwnd); }
                 else if (btnId == 34) { CmdFromRef(hwnd); }
-                else if (btnId == 35) { CmdStub(hwnd); }
+                else if (btnId == 35) { 
+                    currentMode = 35; isDrawing = 0; dragType = 0; ClearSelection(); UpdateStatusBar(); InvalidateRect(hwnd, NULL, TRUE); 
+                }
             }
             if (id != 300 && (id < 222 || id > 224) && id != 226) SetFocus(hwnd); break;
         }
@@ -4917,22 +5264,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpszCmdLine, int nCmdShow) {
     MSG msg; WNDCLASS wc; hInst = hInstance;
-    
-    /* Variables not used in Win32, kept to prevent unused parameter warnings */
-    (void)hPrevInstance;
-    (void)lpszCmdLine;
+    if (!hPrevInstance) {
+        wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+        wc.lpfnWndProc = WndProc; wc.cbClsExtra = 0; wc.cbWndExtra = 0;
+        wc.hInstance = hInstance; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        wc.lpszMenuName = NULL; wc.lpszClassName = "IconEditClass";
+        if (!RegisterClass(&wc)) return FALSE;
 
-    wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
-    wc.lpfnWndProc = WndProc; wc.cbClsExtra = 0; wc.cbWndExtra = 0;
-    wc.hInstance = hInstance; wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW); wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.lpszMenuName = NULL; wc.lpszClassName = "IconEditClass";
-    if (!RegisterClass(&wc)) return FALSE;
-
-    wc.lpfnWndProc = PageSizeProc; wc.lpszClassName = "PageSizeClass"; RegisterClass(&wc);
-    wc.lpfnWndProc = TagEditorProc; wc.lpszClassName = "TagEditorClass"; RegisterClass(&wc);
-    wc.lpfnWndProc = ScaleDlgProc; wc.lpszClassName = "ScaleDlgClass"; RegisterClass(&wc);
-    wc.lpfnWndProc = RefListProc; wc.lpszClassName = "RefListClass"; RegisterClass(&wc);
+        wc.lpfnWndProc = PageSizeProc; wc.lpszClassName = "PageSizeClass"; RegisterClass(&wc);
+        wc.lpfnWndProc = TagEditorProc; wc.lpszClassName = "TagEditorClass"; RegisterClass(&wc);
+        wc.lpfnWndProc = ScaleDlgProc; wc.lpszClassName = "ScaleDlgClass"; RegisterClass(&wc);
+        wc.lpfnWndProc = RefListProc; wc.lpszClassName = "RefListClass"; RegisterClass(&wc);
+    }
 
     hMain = CreateWindow("IconEditClass", "Win32 GCC Vector Editor", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, 680, 560, NULL, NULL, hInstance, NULL);
     if (!hMain) return FALSE; ShowWindow(hMain, nCmdShow); UpdateWindow(hMain);
